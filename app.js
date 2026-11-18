@@ -202,8 +202,13 @@ function render() {
 }
 
 function shell(active) {
-  const whites = Array.from({ length: 7 }, () => "<i></i>").join("");
-  const blacks = [1, 2, 4, 5, 6].map((place) => `<b style="left:calc(${place} / 7 * 100% - 5px)"></b>`).join("");
+  const count = 8;
+  const whites = Array.from({ length: count }, () => "<i></i>").join("");
+  const blacks = [];
+  for (let i = 0; i < count - 1; i++) {
+    if (i % 7 === 2 || i % 7 === 6) continue;
+    blacks.push(`<b style="left:calc((${i + 1}) / ${count} * 100% - 3%)"></b>`);
+  }
   return `
     <header class="masthead">
       <div class="brand">
