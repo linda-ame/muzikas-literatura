@@ -1,16 +1,19 @@
 import { pieces, clipBounds } from "./pieces.js";
 import { answerText, checkAnswer } from "./check.js";
+import { DEFAULT_ID, addClip, blankEntry, chooseClip, rangeError, removeClip, resolveBounds, sanitizeEntry } from "./clips.js";
 
 const TEST_SIZE = 10;
 const SETTINGS_KEY = "ml-settings";
 const SESSION_KEY = "ml-session";
+const CLIPS_KEY = "ml-clips";
 
 const state = {
-  screen: "settings",
+  screen: "learn",
   settings: loadSettings(),
   queue: [],
   index: 0,
   restored: false,
+  editor: { n: null, name: "", from: "", to: "", error: "" },
 };
 
 const playerState = {
@@ -25,6 +28,15 @@ app.addEventListener("click", onClick);
 app.addEventListener("input", onInput);
 app.addEventListener("change", onChange);
 app.addEventListener("submit", onSubmit);
+app.addEventListener("pointerdown", onPointerDown);
+app.addEventListener("keydown", onKeyDown);
+window.addEventListener("pointermove", onPointerMove);
+window.addEventListener("pointerup", () => {
+  if (playerState.scrubPiece && playerState.scrubTo != null) playLearn(playerState.scrubPiece, playerState.scrubTo);
+  playerState.scrub = null;
+  playerState.scrubPiece = null;
+  playerState.scrubTo = null;
+});
 
 window.onYouTubeIframeAPIReady = () => createPlayer();
 
@@ -103,6 +115,30 @@ function saveSettings() {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
 }
 
+function loadStore() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CLIPS_KEY) || "{}");
+    if (!raw || typeof raw !== "object") return {};
+    return raw;
+  } catch {
+    return {};
+  }
+}
+
+function entryFor(n) {
+  return sanitizeEntry(loadStore()[n] || blankEntry());
+}
+
+function writeEntry(n, entry) {
+  const store = loadStore();
+  store[n] = sanitizeEntry(entry);
+  localStorage.setItem(CLIPS_KEY, JSON.stringify(store));
+}
+
+function selectedBounds(piece) {
+  return resolveBounds(entryFor(piece.n), clipBounds(piece), piece.duration);
+}
+
 function saveSession() {
   if (!state.queue.length) {
     sessionStorage.removeItem(SESSION_KEY);
@@ -145,9 +181,6 @@ function restoreSession() {
     state.queue = queue;
     state.index = Math.min(saved.index, queue.length - 1);
     state.screen = saved.screen === "summary" || saved.screen === "question" ? saved.screen : "settings";
-    if (state.screen === "question" && state.queue[state.index]?.answered && state.settings.feedback === "now") {
-      state.screen = "question";
-    }
     state.restored = state.screen !== "settings";
   } catch {
     sessionStorage.removeItem(SESSION_KEY);
@@ -155,21 +188,129 @@ function restoreSession() {
 }
 
 function render() {
-  app.innerHTML =
-    state.screen === "settings" ? settingsView() : state.screen === "summary" ? summaryView() : questionView();
-  if (state.screen !== "question") stopPlayback();
+  const quiz = state.screen === "settings" || state.screen === "question" || state.screen === "summary";
+  app.innerHTML = `
+    ${shell(quiz ? "quiz" : "learn")}
+    ${state.screen === "learn" ? learnView() : state.screen === "settings" ? settingsView() : state.screen === "summary" ? summaryView() : questionView()}
+  `;
+  if (state.screen !== "question" && state.screen !== "learn" && state.screen !== "summary") stopPlayback();
+  if (state.screen === "learn" && playerState.clip?.learn) {
+    setLearnUi(playerState.clip.n, null, playerState.playing ? "Skan" : null);
+  }
+}
+
+function shell(active) {
+  const whites = Array.from({ length: 10 }, (_, i) => `<i class="${i % 7 === 2 || i % 7 === 6 ? "" : "black"}"></i>`).join("");
+  return `
+    <header class="masthead">
+      <div class="brand">
+        <svg class="note" viewBox="0 0 48 48" aria-hidden="true">
+          <path fill="currentColor" d="M20 6h3.2v22.2a6.2 6.2 0 1 1-3.2-5.4V6zm12.4 5.2H36v16.6a6.2 6.2 0 1 1-3.6-5.6V11.2z"/>
+        </svg>
+        <div>
+          <p class="eyebrow">Pēc dzirdes</p>
+          <h1>Mūzikas literatūra</h1>
+        </div>
+      </div>
+      <div class="piano" aria-hidden="true">${whites}</div>
+    </header>
+    <nav class="modes">
+      <button type="button" data-action="goto-learn" class="${active === "learn" ? "is-on" : ""}">Mācīties</button>
+      <button type="button" data-action="goto-quiz" class="${active === "quiz" ? "is-on" : ""}">Pārbaudīt sevi</button>
+    </nav>
+  `;
+}
+
+function learnView() {
+  return `
+    <p class="lede">Te redzams viss saraksts. Play atskaņo ierakstu no mūzikas sākuma līdz beigām. Joslu var vilkt, un −15 / +15 patin pa 15 sekundēm.</p>
+    <div class="stack">
+      ${pieces.map((piece) => pieceCard(piece)).join("")}
+    </div>
+  `;
+}
+
+function pieceCard(piece) {
+  const entry = entryFor(piece.n);
+  const bounds = clipBounds(piece);
+  const playing = playerState.playing && playerState.clip?.token === learnToken(piece.n);
+  const hasCustom = entry.custom.length > 0;
+  const chosen = hasCustom ? entry.selected : DEFAULT_ID;
+  return `
+    <article class="piece" id="piece-${piece.n}">
+      <div class="piece-top">
+        <span class="num">${String(piece.n).padStart(2, "0")}</span>
+        <div>
+          <h2>${esc(piece.author)}</h2>
+          <p class="details">${esc(piece.details)}</p>
+        </div>
+      </div>
+      <div class="transport" style="margin-top:12px">
+        <button class="play ${playing ? "is-on" : ""}" type="button" data-action="learn-play" data-n="${piece.n}">${playing ? "Apturēt" : "Klausīties visu"}</button>
+        <button class="step" type="button" data-action="seek" data-n="${piece.n}" data-by="-15">−15</button>
+        <button class="step" type="button" data-action="seek" data-n="${piece.n}" data-by="15">+15</button>
+        <span class="time" data-time-for="${piece.n}">${clock(piece.start)} / ${clock(piece.duration)}</span>
+      </div>
+      <div class="scrub" data-scrub="${piece.n}" role="slider" tabindex="0" aria-label="Vieta ierakstā: ${esc(piece.author)}" aria-valuemin="0" aria-valuemax="${Math.round(piece.duration)}" aria-valuenow="${Math.round(piece.start)}">
+        <span data-bar-for="${piece.n}"></span>
+      </div>
+      <section class="clips">
+        <h3>Klausāmā daļa pārbaudei</h3>
+        ${clipRow(piece.n, DEFAULT_ID, "Noklusējums", bounds, chosen, hasCustom, false)}
+        ${entry.custom.map((clip) => clipRow(piece.n, clip.id, clip.name, clip, chosen, true, true)).join("")}
+        ${state.editor.n === piece.n ? editorForm(piece) : `<div class="actions" style="margin-top:8px"><button class="ghost" type="button" data-action="open-editor" data-n="${piece.n}">Pievienot citu</button></div>`}
+      </section>
+    </article>
+  `;
+}
+
+function clipRow(n, id, name, range, chosen, showRadio, removable) {
+  const from = range.from ?? range.start;
+  const to = range.to ?? range.end;
+  const label = `${secText(from)}–${secText(to)} s`;
+  if (!showRadio) {
+    return `<div class="pick-row"><span class="pick-name">${esc(name)}</span><span class="pick-time">${label}</span></div>`;
+  }
+  return `
+    <div class="pick-row">
+      <label>
+        <input type="radio" name="pick-${n}" value="${esc(id)}" data-n="${n}" ${chosen === id ? "checked" : ""} />
+        <span class="pick-name">${esc(name)}</span>
+        <span class="pick-time">${label}</span>
+      </label>
+      ${removable ? `<button class="icon" type="button" data-action="delete-clip" data-n="${n}" data-id="${esc(id)}" aria-label="Dzēst daļu ${esc(name)}">×</button>` : ""}
+    </div>
+  `;
+}
+
+function editorForm(piece) {
+  const editor = state.editor;
+  return `
+    <div class="editor">
+      <label class="field">Nosaukums
+        <input type="text" data-draft="name" value="${esc(editor.name)}" maxlength="40" placeholder="piemēram, galvenais motīvs" autocomplete="off" />
+      </label>
+      <div class="range-row">
+        <label class="field">No
+          <input type="text" inputmode="decimal" data-draft="from" value="${esc(editor.from)}" />
+        </label>
+        <label class="field">līdz
+          <input type="text" inputmode="decimal" data-draft="to" value="${esc(editor.to)}" />
+        </label>
+      </div>
+      ${editor.error ? `<p class="warn">${esc(editor.error)}</p>` : `<p class="quiet">Sekundes šajā YouTube ierakstā, no 0 līdz ${Math.floor(piece.duration)}.</p>`}
+      <div class="actions">
+        <button class="primary" type="button" data-action="save-clip" data-n="${piece.n}">Saglabāt</button>
+        <button class="ghost" type="button" data-action="close-editor">Atcelt</button>
+      </div>
+    </div>
+  `;
 }
 
 function settingsView() {
   const { from, to, mode, feedback } = state.settings;
   return `
-    <header class="masthead">
-      <div>
-        <p class="eyebrow">Pēc dzirdes</p>
-        <h1>Mūzikas literatūra</h1>
-        <p class="lede">Noklausies fragmentu un ieraksti autoru tā, kā sarakstā, bet otrajā laukā visu pārējo par šo gabalu.</p>
-      </div>
-    </header>
+    <p class="lede">Noklausies fragmentu un ieraksti autoru tā, kā sarakstā, bet otrajā laukā visu pārējo par šo gabalu. Skan tā daļa, kas mācībās ir ieķeksēta.</p>
     <form class="card" id="settings-form">
       <fieldset>
         <legend>Cik gabalu klausīties?</legend>
@@ -211,23 +352,18 @@ function questionView() {
   const item = current();
   const total = state.queue.length;
   const show = item.answered && state.settings.feedback === "now";
+  const length = Math.max(1, Math.round(item.end - item.start));
   return `
-    <header class="masthead">
-      <div>
-        <p class="eyebrow">Saraksts ${state.settings.from}–${state.settings.to}</p>
-        <h1>${state.settings.mode === "test" ? "Tests" : "Treniņš"}</h1>
-      </div>
-      <button class="ghost" type="button" data-action="settings">Mainīt iestatījumus</button>
-    </header>
     <section class="card">
       <div class="progress">
         <strong>Gabals ${state.index + 1} no ${total}</strong>
-        <span class="quiet">${state.settings.feedback === "now" ? "Atbilde redzama uzreiz" : "Atbildes būs beigās"}</span>
+        <button class="tiny" type="button" data-action="settings">Mainīt iestatījumus</button>
       </div>
+      <p class="quiet">${state.settings.feedback === "now" ? "Atbilde redzama uzreiz" : "Atbildes būs beigās"}</p>
       <div class="listen-row">
         <button class="listen ${playerState.playing ? "is-on" : ""}" id="play-btn" type="button" data-action="toggle-play">${playLabel(item)}</button>
       </div>
-      <p class="status" id="clip-status">${item.heard ? "Vari klausīties vēlreiz vai rakstīt atbildi." : "Fragments ilgst apmēram pusminūti. Ja vispirms ir reklāma, pagaidi."}</p>
+      <p class="status" id="clip-status">${item.heard ? "Vari klausīties vēlreiz vai rakstīt atbildi." : `Fragments ilgst apmēram ${length} s. Ja vispirms ir reklāma, pagaidi.`}</p>
       <div class="meter" aria-hidden="true"><span id="clip-bar"></span></div>
       <form id="answer-form" class="stack">
         <label class="field">Autors
@@ -257,14 +393,9 @@ function summaryView() {
     ? (total === 1 ? "Tests pabeigts. Noklausīts 1 gabals." : `Tests pabeigts. Noklausīti ${total} gabali.`)
     : (total === 1 ? "Vienīgais gabals ir noklausīts." : `Visi ${total} gabali ir noklausīti.`);
   return `
-    <header class="masthead">
-      <div>
-        <p class="eyebrow">Saraksts ${state.settings.from}–${state.settings.to}</p>
-        <h1>Rezultāts</h1>
-        <p class="lede">${title}</p>
-      </div>
-    </header>
     <section class="card">
+      <h2>Rezultāts</h2>
+      <p class="lede">${title}</p>
       <div class="scores">
         <div class="score"><b>${both}/${total}</b> abi pareizi</div>
         <div class="score"><b>${authors}/${total}</b> autors</div>
@@ -341,6 +472,11 @@ function planText(settings) {
 }
 
 function onInput(event) {
+  const draft = event.target.dataset.draft;
+  if (draft) {
+    state.editor[draft] = event.target.value;
+    return;
+  }
   const field = event.target.dataset.field;
   if (field === "author" || field === "details") {
     const item = current();
@@ -366,6 +502,12 @@ function onChange(event) {
       plan.textContent = planText(state.settings);
       plan.classList.remove("warn");
     }
+    return;
+  }
+  if (event.target.name?.startsWith("pick-")) {
+    const n = Number(event.target.dataset.n);
+    writeEntry(n, chooseClip(entryFor(n), event.target.value));
+    render();
   }
 }
 
@@ -388,19 +530,32 @@ function onClick(event) {
     saveSettings();
     render();
   } else if (action === "resume") {
-    state.screen = sessionStorage.getItem(SESSION_KEY) ? state.screen : "settings";
     const saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
     if (saved?.screen) state.screen = saved.screen;
     state.restored = false;
     render();
   } else if (action === "settings") {
     if (state.screen === "question" && !confirm("Pārtraukt šo reizi un mainīt iestatījumus?")) return;
+    leaveQuiz();
+  } else if (action === "goto-learn") {
+    if (state.screen === "learn") return;
+    if (state.screen === "question" && !confirm("Pārtraukt šo reizi un iet mācīties?")) return;
+    if (state.screen === "question" || state.screen === "summary") {
+      state.queue = [];
+      state.restored = false;
+      saveSession();
+    }
     stopPlayback();
-    state.screen = "settings";
-    state.queue = [];
-    state.restored = false;
-    saveSession();
+    state.screen = "learn";
     render();
+  } else if (action === "goto-quiz") {
+    if (state.screen === "learn") {
+      stopPlayback();
+      state.screen = "settings";
+      render();
+    } else if (state.screen === "summary") {
+      leaveQuiz();
+    }
   } else if (action === "again") {
     begin(true);
   } else if (action === "toggle-play") {
@@ -413,7 +568,59 @@ function onClick(event) {
     const piece = pieces.find((entry) => entry.n === Number(button.dataset.n));
     const item = state.queue.find((entry) => entry.piece.n === piece.n);
     playItem(item);
+  } else if (action === "learn-play") {
+    const piece = pieces.find((entry) => entry.n === Number(button.dataset.n));
+    toggleLearn(piece);
+  } else if (action === "seek") {
+    const piece = pieces.find((entry) => entry.n === Number(button.dataset.n));
+    seekBy(piece, Number(button.dataset.by));
+  } else if (action === "open-editor") {
+    const piece = pieces.find((entry) => entry.n === Number(button.dataset.n));
+    const bounds = clipBounds(piece);
+    state.editor = { n: piece.n, name: "", from: secText(bounds.start), to: secText(bounds.end), error: "" };
+    render();
+    document.querySelector("[data-draft='name']")?.focus();
+  } else if (action === "close-editor") {
+    state.editor = { n: null, name: "", from: "", to: "", error: "" };
+    render();
+  } else if (action === "save-clip") {
+    saveCustom(Number(button.dataset.n));
+  } else if (action === "delete-clip") {
+    const n = Number(button.dataset.n);
+    writeEntry(n, removeClip(entryFor(n), button.dataset.id));
+    render();
   }
+}
+
+function leaveQuiz() {
+  stopPlayback();
+  state.screen = "settings";
+  state.queue = [];
+  state.restored = false;
+  saveSession();
+  render();
+}
+
+function saveCustom(n) {
+  const piece = pieces.find((entry) => entry.n === n);
+  const name = state.editor.name.trim();
+  const from = parseSeconds(state.editor.from);
+  const to = parseSeconds(state.editor.to);
+  if (!name) {
+    state.editor.error = "Iedod šai daļai nosaukumu.";
+    render();
+    return;
+  }
+  const error = rangeError(from, to, piece.duration);
+  if (error) {
+    state.editor.error = error;
+    render();
+    return;
+  }
+  const clip = { id: Math.random().toString(36).slice(2, 10), name, from, to };
+  writeEntry(n, addClip(entryFor(n), clip));
+  state.editor = { n: null, name: "", from: "", to: "", error: "" };
+  render();
 }
 
 function begin(keepSettings) {
@@ -426,7 +633,7 @@ function begin(keepSettings) {
   const size = settings.mode === "test" ? Math.min(TEST_SIZE, shuffled.length) : shuffled.length;
   state.queue = shuffled.slice(0, size).map((piece) => ({
     piece,
-    ...clipBounds(piece),
+    ...selectedBounds(piece),
     authorInput: "",
     detailsInput: "",
     answered: false,
@@ -514,7 +721,7 @@ function togglePlay() {
 
 function playItem(item) {
   item.heard = true;
-  const bounds = clipBounds(item.piece);
+  const bounds = selectedBounds(item.piece);
   item.start = bounds.start;
   item.end = bounds.end;
   const clip = {
@@ -535,6 +742,117 @@ function playItem(item) {
   saveSession();
 }
 
+function learnToken(n) {
+  return `learn:${n}`;
+}
+
+function toggleLearn(piece) {
+  const token = learnToken(piece.n);
+  if (playerState.playing && playerState.clip?.token === token) {
+    playerState.player?.pauseVideo();
+    playerState.playing = false;
+    setLearnUi(piece.n, null, "Apturēts.");
+    return;
+  }
+  if (playerState.clip?.token === token && playerState.ready) {
+    playerState.player.playVideo();
+    playerState.playing = true;
+    setLearnUi(piece.n, null, "Skan");
+    return;
+  }
+  playLearn(piece, null);
+}
+
+function playLearn(piece, at) {
+  const end = Math.max(piece.start + 1, piece.duration - 0.25);
+  const startAt = at == null ? piece.start : Math.max(0, Math.min(end - 0.3, at));
+  const token = learnToken(piece.n);
+  clearOtherBars(piece.n);
+  if (playerState.clip?.token === token && at != null) {
+    playerState.clip.end = end;
+    playerState.playing = true;
+    setLearnUi(piece.n, startAt, "Skan");
+    if (playerState.ready) {
+      playerState.player.seekTo(startAt, true);
+      playerState.player.playVideo();
+    } else {
+      playerState.clip.start = startAt;
+    }
+    return;
+  }
+  playerState.clip = {
+    id: piece.youtubeId,
+    start: startAt,
+    end,
+    token,
+    learn: true,
+    n: piece.n,
+    duration: piece.duration,
+  };
+  playerState.playing = true;
+  if (!playerState.ready) {
+    setLearnUi(piece.n, startAt, "Atskaņotājs vēl gatavojas. Paspied vēlreiz pēc mirkļa.");
+    return;
+  }
+  setLearnUi(piece.n, startAt, "Ielādē… ja vispirms ir reklāma, pagaidi.");
+  loadClip(playerState.clip);
+}
+
+function seekBy(piece, delta) {
+  let time = piece.start;
+  if (playerState.clip?.token === learnToken(piece.n) && playerState.ready) {
+    try {
+      time = playerState.player.getCurrentTime();
+    } catch {
+      time = piece.start;
+    }
+  }
+  playLearn(piece, time + delta);
+}
+
+function onPointerDown(event) {
+  const scrub = event.target.closest("[data-scrub]");
+  if (!scrub) return;
+  playerState.scrub = scrub;
+  moveScrub(event);
+}
+
+function onPointerMove(event) {
+  if (!playerState.scrub) return;
+  moveScrub(event);
+}
+
+function moveScrub(event) {
+  const scrub = playerState.scrub;
+  if (!scrub) return;
+  const piece = pieces.find((entry) => entry.n === Number(scrub.dataset.scrub));
+  if (!piece) return;
+  const rect = scrub.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  const target = ratio * piece.duration;
+  playerState.scrubPiece = piece;
+  playerState.scrubTo = target;
+  setLearnUi(piece.n, target, null);
+  const now = performance.now();
+  if (now - (playerState.scrubAt || 0) < 140) return;
+  playerState.scrubAt = now;
+  playLearn(piece, target);
+}
+
+function onKeyDown(event) {
+  const scrub = event.target.closest?.("[data-scrub]");
+  if (!scrub) return;
+  const piece = pieces.find((entry) => entry.n === Number(scrub.dataset.scrub));
+  if (!piece) return;
+  if (event.key === "ArrowRight") {
+    event.preventDefault();
+    seekBy(piece, 5);
+  } else if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    seekBy(piece, -5);
+  }
+}
+
 function clipToken(item) {
   return `${item.piece.n}:${item.start}:${item.end}`;
 }
@@ -550,6 +868,24 @@ function loadClip(clip) {
 function onPlayerState(event) {
   hidePlayerTitle();
   if (!playerState.clip) return;
+  if (playerState.clip.learn) {
+    const n = playerState.clip.n;
+    if (event.data === YT.PlayerState.PLAYING) {
+      playerState.playing = true;
+      let time = playerState.clip.start;
+      try {
+        time = playerState.player.getCurrentTime();
+      } catch {
+        /* keep the requested time */
+      }
+      setLearnUi(n, time, "Skan");
+    }
+    if (event.data === YT.PlayerState.ENDED || event.data === YT.PlayerState.PAUSED) {
+      playerState.playing = false;
+      setLearnUi(n, null, event.data === YT.PlayerState.ENDED ? "Gabals beidzās." : null);
+    }
+    return;
+  }
   if (event.data === YT.PlayerState.PLAYING) {
     playerState.playing = true;
     setPlayUi(current() || playerState.clip, "Skan…");
@@ -565,12 +901,18 @@ function onPlayerState(event) {
 function onPlayerError(event) {
   playerState.playing = false;
   const blocked = event.data === 101 || event.data === 150 || event.data === 153;
-  setPlayUi(
-    current(),
-    blocked
-      ? "Šo ierakstu te nevar atskaņot. Atbildi vari ierakstīt tik un tā vai spiest Nezinu."
-      : "Neizdevās atskaņot. Paspied Klausīties vēlreiz.",
-  );
+  const message = blocked
+    ? "Šo ierakstu te nevar atskaņot."
+    : "Neizdevās atskaņot. Paspied vēlreiz.";
+  if (playerState.clip?.learn) setLearnUi(playerState.clip.n, null, message);
+  else {
+    setPlayUi(
+      current(),
+      blocked
+        ? "Šo ierakstu te nevar atskaņot. Atbildi vari ierakstīt tik un tā vai spiest Nezinu."
+        : "Neizdevās atskaņot. Paspied Klausīties vēlreiz.",
+    );
+  }
   if (blocked) setTimeout(rebuildPlayer, 0);
 }
 
@@ -582,6 +924,17 @@ function watchPlayback() {
     time = playerState.player.getCurrentTime();
     code = playerState.player.getPlayerState();
   } catch {
+    return;
+  }
+  if (playerState.clip.learn) {
+    const { end, n, duration } = playerState.clip;
+    if (code === YT.PlayerState.PLAYING && time >= end - 0.25 && time < end + 4) {
+      playerState.player.pauseVideo();
+      playerState.playing = false;
+      setLearnUi(n, duration, "Gabals beidzās.");
+      return;
+    }
+    if (code === YT.PlayerState.PLAYING) setLearnUi(n, time, `Skan · ${clock(time)}`);
     return;
   }
   const { start, end } = playerState.clip;
@@ -612,6 +965,46 @@ function setPlayUi(item, message) {
   }
 }
 
+function setLearnUi(n, time, message) {
+  const piece = pieces.find((entry) => entry.n === n);
+  if (!piece) return;
+  const button = document.querySelector(`[data-action="learn-play"][data-n="${n}"]`);
+  const playing = playerState.playing && playerState.clip?.token === learnToken(n);
+  if (button) {
+    button.textContent = playing ? "Apturēt" : "Klausīties visu";
+    button.classList.toggle("is-on", playing);
+  }
+  if (time != null) {
+    const clockFace = document.querySelector(`[data-time-for="${n}"]`);
+    if (clockFace) clockFace.textContent = `${clock(time)} / ${clock(piece.duration)}`;
+    const bar = document.querySelector(`[data-bar-for="${n}"]`);
+    if (bar) bar.style.width = `${Math.max(0, Math.min(1, time / piece.duration)) * 100}%`;
+    const scrub = document.querySelector(`[data-scrub="${n}"]`);
+    if (scrub) scrub.setAttribute("aria-valuenow", String(Math.round(time)));
+  }
+  if (message) {
+    let status = document.querySelector(`#piece-${n} .learn-status`);
+    if (!status) {
+      status = document.createElement("p");
+      status.className = "status learn-status";
+      document.querySelector(`#piece-${n} .scrub`)?.after(status);
+    }
+    status.textContent = message;
+  }
+}
+
+function clearOtherBars(n) {
+  document.querySelectorAll("[data-bar-for]").forEach((bar) => {
+    if (bar.dataset.barFor !== String(n)) bar.style.width = "0";
+  });
+  document.querySelectorAll("[data-action='learn-play']").forEach((button) => {
+    if (button.dataset.n !== String(n)) {
+      button.textContent = "Klausīties visu";
+      button.classList.remove("is-on");
+    }
+  });
+}
+
 function playLabel(item) {
   if (playerState.playing && item && playerState.clip?.token === clipToken(item)) return "Apturēt";
   if (item?.heard) return "Klausīties vēlreiz";
@@ -626,11 +1019,27 @@ function setBar(ratio) {
 function stopPlayback() {
   playerState.playing = false;
   playerState.clip = null;
+  playerState.scrub = null;
   try {
     playerState.player?.pauseVideo();
   } catch {
     /* the player may not exist yet */
   }
+}
+
+function clock(seconds) {
+  const whole = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(whole / 60);
+  return `${minutes}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+function secText(value) {
+  return String(Math.round(value * 10) / 10).replace(".", ",");
+}
+
+function parseSeconds(value) {
+  const n = Number(String(value ?? "").trim().replace(",", "."));
+  return Number.isFinite(n) ? Math.round(n * 10) / 10 : NaN;
 }
 
 const PAGE_TITLE = "Mūzikas literatūra";
