@@ -514,6 +514,9 @@ function togglePlay() {
 
 function playItem(item) {
   item.heard = true;
+  const bounds = clipBounds(item.piece);
+  item.start = bounds.start;
+  item.end = bounds.end;
   const clip = {
     id: item.piece.youtubeId,
     start: item.start,
