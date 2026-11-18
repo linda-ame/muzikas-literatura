@@ -25,7 +25,46 @@ const WORD_ALTS = {
   pamattema: [["pamattema"], ["pamata", "tema"]],
 };
 
-const SKIP_AUTHOR = new Set(["van"]);
+const SKIP_AUTHOR = new Set(["van", "fon"]);
+
+// Pilnie vārdi der līdzās saraksta saīsinājumam. Rādīšanā paliek saraksta forma.
+const GIVEN_NAMES = {
+  "A.Vivaldi": [["Antonio"]],
+  "G.F.Hendelis": [["Georgs"], ["Frīdrihs"]],
+  "J.S.Bahs": [["Johans"], ["Sebastiāns"]],
+  "J.Haidns": [["Jozefs"]],
+  "V.A.Mocarts": [["Volfgangs"], ["Amadejs"]],
+  "L.van Bēthovens": [["Ludvigs"]],
+  "F.Šūberts": [["Francs"]],
+  "K.M.Vēbers": [["Karls"], ["Marija"]],
+  "F.Mendelszons-Bartoldi": [["Fēlikss"]],
+  "J.Brāmss": [["Johanness", "Johanss"]],
+  "R.Vāgners": [["Rihards"]],
+  "Dž. Verdi": [["Džuzepe"]],
+  "Ž.Bizē": [["Žoržs"]],
+  "F.Šopēns": [["Frideriks"]],
+  "E.Grīgs": [["Edvards"]],
+  "M.Musorgskis": [["Modests"]],
+  "N.Rimskis-Korsakovs": [["Nikolajs"]],
+  "P.Čaikovskis": [["Pēteris", "Pjotrs"]],
+  "M.Ravels": [["Moriss"]],
+  "S.Prokofjevs": [["Sergejs"]],
+  "A.Jurjāns": [["Andrejs"]],
+  "J.Vītols": [["Jāzeps"]],
+  "E.Melngailis": [["Emilis"]],
+  "E.Dārziņš": [["Emīls"]],
+  "A.Kalniņš": [["Alfrēds"]],
+  "Jānis Mediņš": [["Jānis"]],
+  "L. Garūta": [["Lūcija"]],
+  "P. Barisons": [["Pēteris"]],
+  "J.Ivanovs": [["Jānis"]],
+  "M.Zariņš": [["Marģeris"]],
+  "P.Dambis": [["Pauls"]],
+  "I.Kalniņš": [["Imants"]],
+  "P.Vasks": [["Pēteris"]],
+  "M.Brauns": [["Mārtiņš"]],
+  "A.Maskats": [["Arturs"]],
+};
 
 export function normalize(value) {
   return String(value ?? "")
@@ -88,10 +127,6 @@ function tokenFound(tokens, wanted) {
   });
 }
 
-function optionFound(tokens, option) {
-  return option.every((word) => tokenFound(tokens, word));
-}
-
 function hasMainTheme(tokens) {
   if (tokens.includes("gp")) return true;
   for (let i = 0; i < tokens.length - 1; i++) {
@@ -131,63 +166,141 @@ function surfaceLabel(details, token) {
   return found ? found.replace(/^\.+|\.+$/g, "") : token;
 }
 
-export function authorMatches(expected, input) {
-  const expectedTokens = tokenize(expected).filter((token) => !SKIP_AUTHOR.has(token));
-  const initials = expectedTokens.filter((token) => token.length <= 2);
-  const names = expectedTokens.filter((token) => token.length > 2);
-  const tokens = tokenize(input);
-  if (!tokens.length) return false;
-  return namesOk(names, tokens) && initialsOk(initials, tokens);
+function authorSlots(expected) {
+  const given = GIVEN_NAMES[expected] || [];
+  const options = given.map((names) => names.map((name) => tokenize(name).find((token) => token.length > 2)));
+  const flatGiven = new Set(options.flat());
+  const tokens = tokenize(expected).filter((token) => !SKIP_AUTHOR.has(token) && !flatGiven.has(token));
+  const initials = tokens.filter((token) => token.length <= 2);
+  const surnames = tokens.filter((token) => token.length > 2);
+  const slots = options.map((choices, index) => ({
+    options: choices,
+    initial: initials[index] || choices[0][0],
+  }));
+  return { surnames, slots };
 }
 
-function namesOk(names, tokens) {
-  const visit = (index, used) => {
+export function authorMatches(expected, input) {
+  const tokens = tokenize(input);
+  if (!tokens.length) return false;
+  const { surnames, slots } = authorSlots(expected);
+  const used = [];
+  if (!namesOk(surnames, tokens, used)) return false;
+  return givenOk(slots, tokens, used);
+}
+
+function namesOk(names, tokens, used = []) {
+  const visit = (index) => {
     if (index === names.length) return true;
     for (let i = 0; i < tokens.length; i++) {
       if (used[i]) continue;
       if (!tokenFound([tokens[i]], names[index])) continue;
       used[i] = true;
-      if (visit(index + 1, used)) return true;
+      if (visit(index + 1)) return true;
       used[i] = false;
     }
     return false;
   };
-  return visit(0, []);
+  return visit(0);
 }
 
-function initialsOk(initials, tokens) {
-  const visit = (index, used) => {
-    if (index === initials.length) return true;
+function givenOk(slots, tokens, used) {
+  const visit = (index) => {
+    if (index === slots.length) return true;
     for (let i = 0; i < tokens.length; i++) {
       if (used[i]) continue;
       const token = tokens[i];
-      const need = initials[index];
-      const asName = token === need || (token.startsWith(need) && token.length >= need.length + 2);
-      if (asName) {
+      const slot = slots[index];
+      const asName = slot.options.some((name) => tokenFound([token], name));
+      if (token === slot.initial || asName) {
         used[i] = true;
-        if (visit(index + 1, used)) return true;
+        if (visit(index + 1)) return true;
         used[i] = false;
       }
       if (token.length >= 2 && token.length <= 4) {
-        const glued = initials.slice(index, index + token.length).join("");
+        const glued = slots.slice(index, index + token.length).map((item) => item.initial).join("");
         if (token === glued) {
           used[i] = true;
-          if (visit(index + token.length, used)) return true;
+          if (visit(index + token.length)) return true;
           used[i] = false;
         }
       }
     }
     return false;
   };
-  return visit(0, []);
+  return visit(0);
+}
+
+function fuzzyEq(got, expected, loose) {
+  if (got === expected) return true;
+  const limit = loose ? maxDist(expected) : 1;
+  if (!limit || !got || !expected) return false;
+  if (got[0] !== expected[0]) return false;
+  if (Math.abs(got.length - expected.length) > limit) return false;
+  return levenshtein(got, expected) <= limit;
+}
+
+function coverGroups(groups, tokens) {
+  const covered = Array(groups.length).fill(false);
+  if (!groups.length || !tokens.length) return covered;
+  const prepared = groups.map((group) => group.alts.map((option) => option.join("")));
+  const tUsed = Array(tokens.length).fill(false);
+  let best = covered.slice();
+  let bestCount = 0;
+
+  function matches(start, length, tokenStart, tokenLength) {
+    for (let i = 0; i < tokenLength; i++) if (tUsed[tokenStart + i]) return false;
+    const got = tokens.slice(tokenStart, tokenStart + tokenLength).join("");
+    let options = [""];
+    for (let index = start; index < start + length; index++) {
+      const next = [];
+      for (const prefix of options) {
+        for (const alt of prepared[index]) next.push(prefix + alt);
+      }
+      options = next;
+    }
+    return options.some((expected) => fuzzyEq(got, expected, length === 1 && tokenLength === 1));
+  }
+
+  function remember() {
+    const count = covered.filter(Boolean).length;
+    if (count > bestCount) {
+      bestCount = count;
+      best = covered.slice();
+    }
+  }
+
+  function walk(start) {
+    remember();
+    if (start >= groups.length) return true;
+    const maxLength = Math.min(4, groups.length - start);
+    for (let length = 1; length <= maxLength; length++) {
+      for (let tokenStart = 0; tokenStart < tokens.length; tokenStart++) {
+        if (tUsed[tokenStart]) continue;
+        const maxTokens = Math.min(tokens.length - tokenStart, Math.max(length, 2) + length);
+        for (let tokenLength = 1; tokenLength <= maxTokens; tokenLength++) {
+          if (tokens.slice(tokenStart, tokenStart + tokenLength).some((_, offset) => tUsed[tokenStart + offset])) continue;
+          if (!matches(start, length, tokenStart, tokenLength)) continue;
+          for (let offset = 0; offset < tokenLength; offset++) tUsed[tokenStart + offset] = true;
+          for (let offset = 0; offset < length; offset++) covered[start + offset] = true;
+          if (walk(start + length)) return true;
+          for (let offset = 0; offset < tokenLength; offset++) tUsed[tokenStart + offset] = false;
+          for (let offset = 0; offset < length; offset++) covered[start + offset] = false;
+        }
+      }
+    }
+    return false;
+  }
+
+  walk(0);
+  return best;
 }
 
 export function detailResult(details, input) {
   const tokens = tokenize(input);
-  const missing = [];
-  for (const group of groupsFrom(details)) {
-    if (!group.alts.some((option) => optionFound(tokens, option))) missing.push(group.label);
-  }
+  const groups = groupsFrom(details);
+  const covered = coverGroups(groups, tokens);
+  const missing = groups.filter((_, index) => !covered[index]).map((group) => group.label);
   if (/G\.?\s*P\.?/i.test(details) && !hasMainTheme(tokens)) missing.push("G.P.");
   return { ok: missing.length === 0 && tokens.length > 0, missing: [...new Set(missing)] };
 }

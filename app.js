@@ -202,7 +202,8 @@ function render() {
 }
 
 function shell(active) {
-  const whites = Array.from({ length: 10 }, (_, i) => `<i class="${i % 7 === 2 || i % 7 === 6 ? "" : "black"}"></i>`).join("");
+  const whites = Array.from({ length: 7 }, () => "<i></i>").join("");
+  const blacks = [1, 2, 4, 5, 6].map((place) => `<b style="left:calc(${place} / 7 * 100% - 5px)"></b>`).join("");
   return `
     <header class="masthead">
       <div class="brand">
@@ -210,8 +211,8 @@ function shell(active) {
           <path fill="currentColor" d="M20 6h3.2v22.2a6.2 6.2 0 1 1-3.2-5.4V6zm12.4 5.2H36v16.6a6.2 6.2 0 1 1-3.6-5.6V11.2z"/>
         </svg>
         <h1>Mūzikas literatūra</h1>
+        <div class="piano" aria-hidden="true">${whites}${blacks}</div>
       </div>
-      <div class="piano" aria-hidden="true">${whites}</div>
     </header>
     <nav class="modes">
       <button type="button" data-action="goto-learn" class="${active === "learn" ? "is-on" : ""}">Mācīties</button>
@@ -473,7 +474,7 @@ function resultBlock(item) {
     : none
       ? verdictLine(false, "Nepareizi")
       : verdictLine(item.authorOk, `Autors — ${word(item.authorOk)}`) + verdictLine(item.detailsOk, `Pārējā informācija — ${word(item.detailsOk)}`);
-  const key = both ? "" : `
+  const key = `
     <div class="answer-key">
       <p class="key-kicker">Pareizā atbilde</p>
       <p class="key-author">${esc(item.piece.author)}</p>

@@ -87,7 +87,7 @@ h1, h2, h3 {
   margin: 0;
 }
 
-h1 { font-size: 1.45rem; line-height: 1.25; }
+h1 { font-size: clamp(1.02rem, 4.5vw, 1.45rem); line-height: 1.2; }
 
 h2 { font-size: 1.2rem; }
 
@@ -99,35 +99,35 @@ h2 { font-size: 1.2rem; }
 .lede { margin: 10px 0 0; max-width: 40rem; }
 
 .piano {
+  position: relative;
   display: flex;
-  height: 28px;
-  margin-top: 10px;
-  width: min(200px, 55%);
-  border-radius: 8px;
+  flex: none;
+  height: 34px;
+  width: 118px;
+  margin-left: 4px;
+  border-radius: 6px;
   overflow: hidden;
-  box-shadow: 0 8px 20px rgba(23, 26, 32, 0.08);
+  box-shadow: 0 6px 14px rgba(23, 26, 32, 0.12);
+  border: 1px solid #d9d1c4;
+  background: #fbfaf7;
 }
 
 .piano i {
   flex: 1;
-  background: #fbfaf7;
   border-right: 1px solid #ddd6cc;
-  position: relative;
   font-style: normal;
 }
 
 .piano i:last-child { border-right: 0; }
 
-.piano i.black::after {
-  content: "";
+.piano b {
   position: absolute;
-  left: 62%;
   top: 0;
-  width: 58%;
+  width: 10px;
   height: 58%;
   background: #1b1e24;
-  border-radius: 0 0 3px 3px;
-  z-index: 1;
+  border-radius: 0 0 2px 2px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
 }
 
 .modes {
@@ -593,7 +593,6 @@ body.sheet-open { overflow: hidden; }
 .warn { color: var(--bad); font-weight: 700; margin: 0; }
 
 @media (max-width: 720px) {
-  .piano { display: none; }
   .scores { grid-template-columns: 1fr; }
   .time { margin-left: 0; }
   #app { padding: 12px 0 28px; }

@@ -44,7 +44,14 @@ test("autors pieņem saraksta formu un sīkas atšķirības", () => {
   assert.equal(authorMatches(by(15).author, "F. Mendelszons"), false);
   assert.equal(authorMatches(by(24).author, "N. Rimskis Korsakovs"), true);
   assert.equal(authorMatches(by(41).author, "Janis Medins"), true);
-  assert.equal(authorMatches(by(41).author, "J. Medins"), false);
+  assert.equal(authorMatches(by(41).author, "J. Medins"), true);
+  assert.equal(authorMatches(by(41).author, "J. Vitols"), false);
+  assert.equal(authorMatches(by(1).author, "Antonio Vivaldi"), true);
+  assert.equal(authorMatches(by(3).author, "Johans Sebastians Bahs"), true);
+  assert.equal(authorMatches(by(38).author, "Alfreds Kalnins"), true);
+  assert.equal(authorMatches(by(38).author, "Imants Kalnins"), false);
+  assert.equal(authorMatches(by(14).author, "Karls Marija fon Vebers"), true);
+  assert.equal(authorMatches(by(25).author, "Pjotrs Caikovskis"), true);
   assert.equal(authorMatches(by(38).author, "A.Kalnins"), true);
   assert.equal(authorMatches(by(38).author, "I.Kalniņš"), false);
   assert.equal(authorMatches(by(47).author, "Imants Kalniņš"), true);
@@ -56,6 +63,8 @@ test("informācijā jābūt visam, bet drīkst kļūdīties sīkumos", () => {
   const ok = (n, text) => detailResult(by(n).details, text).ok;
 
   assert.equal(ok(1, "Gada laiki, vijolkoncerts Pavasaris, 1. dala"), true);
+  assert.equal(ok(1, "Gadalaiki, vijolkoncerts Pavasaris, 1, dala"), true);
+  assert.equal(ok(1, "gada laiku vijoles koncerts Pavasaris pirma dala"), true);
   assert.equal(ok(1, "vijolkoncerts Pavasaris"), false);
   assert.equal(ok(1, "gada laiki vijoles koncerts Pavasaris pirma dala"), true);
   assert.equal(ok(7, "40. simfonija 1. dala G.P."), true);
