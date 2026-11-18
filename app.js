@@ -390,7 +390,6 @@ function questionView() {
         <strong>${state.index + 1}. no ${total}</strong>
         <button class="tiny" type="button" data-action="settings">Mainīt iestatījumus</button>
       </div>
-      <p class="quiet">${state.settings.feedback === "now" ? "Atbilde redzama uzreiz" : "Atbildes būs beigās"}</p>
       <div class="listen-row">
         <button class="listen ${playerState.playing ? "is-on" : ""}" id="play-btn" type="button" data-action="toggle-play">${playLabel(item)}</button>
       </div>
@@ -401,7 +400,7 @@ function questionView() {
           <input type="text" name="author" data-field="author" value="${esc(item.authorInput)}" autocomplete="off" autocapitalize="off" lang="lv" ${show ? "readonly" : ""} />
         </label>
         <label class="field">Pārējā informācija
-          <textarea name="details" data-field="details" lang="lv" ${show ? "readonly" : ""}>${esc(item.detailsInput)}</textarea>
+          <textarea name="details" data-field="details" lang="lv" rows="2" ${show ? "readonly" : ""}>${esc(item.detailsInput)}</textarea>
         </label>
         ${show ? resultBlock(item) : `
           <div class="actions">
@@ -460,20 +459,27 @@ function reviewItem(item) {
   `;
 }
 
+function verdictLine(ok, text) {
+  const mark = ok ? "✓" : "✕";
+  return `<p class="verdict ${ok ? "ok" : "no"}"><span class="tick" aria-hidden="true">${mark}</span><span>${text}</span></p>`;
+}
+
 function resultBlock(item) {
-  if (item.authorOk && item.detailsOk) {
-    return `<div class="result good"><h3>Pareizi.</h3></div>`;
-  }
-  const verdict = !item.authorOk && !item.detailsOk
-    ? "Nepareizi."
-    : `${item.authorOk ? "Autors pareizi." : "Autors nepareizi."} ${item.detailsOk ? "Informācija pareizi." : "Informācija nepareizi."}`;
-  return `
-    <div class="result ${markKind(item)}"><h3>${verdict}</h3></div>
-    <div class="answer-full">
-      <p>${esc(item.piece.author)}</p>
-      <p>${esc(answerText(item.piece))}</p>
-    </div>
-  `;
+  const both = item.authorOk && item.detailsOk;
+  const none = !item.authorOk && !item.detailsOk;
+  const word = (ok) => (ok ? "pareizi" : "nepareizi");
+  const lines = both
+    ? verdictLine(true, "Pareizi")
+    : none
+      ? verdictLine(false, "Nepareizi")
+      : verdictLine(item.authorOk, `Autors — ${word(item.authorOk)}`) + verdictLine(item.detailsOk, `Pārējā informācija — ${word(item.detailsOk)}`);
+  const key = both ? "" : `
+    <div class="answer-key">
+      <p class="key-kicker">Pareizā atbilde</p>
+      <p class="key-author">${esc(item.piece.author)}</p>
+      <p class="key-details">${esc(answerText(item.piece))}</p>
+    </div>`;
+  return `<div class="result ${markKind(item)}">${lines}</div>${key}`;
 }
 
 function markKind(item) {
