@@ -256,9 +256,9 @@ function pieceDialog(piece) {
     <div class="sheet">
       <div class="sheet-card" role="dialog" aria-modal="true" aria-label="${piece.n}. ${esc(piece.author)}" tabindex="-1">
         <div class="sheet-nav">
-          <button class="ghost" type="button" data-action="learn-step" data-by="-1" ${atStart ? "disabled" : ""}>Iepriekšējais</button>
-          <button class="icon" type="button" data-action="close-piece" aria-label="Aizvērt">×</button>
-          <button class="ghost" type="button" data-action="learn-step" data-by="1" ${atEnd ? "disabled" : ""}>Nākamais</button>
+          <button class="ghost" type="button" data-action="learn-step" data-by="-1" ${atStart ? "disabled" : ""}>‹ Iepriekšējais</button>
+          <button class="ghost" type="button" data-action="learn-step" data-by="1" ${atEnd ? "disabled" : ""}>Nākamais ›</button>
+          <button class="sheet-close" type="button" data-action="close-piece" aria-label="Aizvērt">×</button>
         </div>
         ${pieceCard(piece)}
       </div>
