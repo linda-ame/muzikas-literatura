@@ -88,7 +88,7 @@ h1, h2, h3 {
   margin: 0;
 }
 
-h1 { font-size: clamp(1rem, 3.8vw, 1.45rem); line-height: 1.2; white-space: nowrap; }
+h1 { font-size: clamp(1.28rem, 5.6vw, 1.9rem); line-height: 1.15; white-space: nowrap; }
 
 h2 { font-size: 1.2rem; }
 
@@ -103,9 +103,9 @@ h2 { font-size: 1.2rem; }
   position: relative;
   display: flex;
   flex: none;
-  height: 36px;
-  width: clamp(156px, 42vw, 220px);
-  border-radius: 6px;
+  height: 28px;
+  width: clamp(86px, 24vw, 112px);
+  border-radius: 4px;
   overflow: hidden;
   box-shadow: 0 6px 14px rgba(23, 26, 32, 0.12);
   border: 1px solid #d9d1c4;
@@ -123,10 +123,10 @@ h2 { font-size: 1.2rem; }
 .piano b {
   position: absolute;
   top: 0;
-  width: 6%;
-  height: 58%;
+  width: 8.8%;
+  height: 62%;
   background: #1b1e24;
-  border-radius: 0 0 2px 2px;
+  border-radius: 0 0 1.5px 1.5px;
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
 }
 
@@ -353,7 +353,7 @@ input:focus, textarea:focus {
 
 .sheet-nav {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   gap: 8px;
   margin-bottom: 10px;
@@ -361,6 +361,11 @@ input:focus, textarea:focus {
   top: 0;
   z-index: 1;
   background: var(--bg);
+}
+
+.sheet-steps {
+  display: flex;
+  gap: 8px;
 }
 
 .sheet-nav .ghost { padding: 8px 12px; }

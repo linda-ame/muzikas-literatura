@@ -202,13 +202,10 @@ function render() {
 }
 
 function shell(active) {
-  const count = 8;
-  const whites = Array.from({ length: count }, () => "<i></i>").join("");
-  const blacks = [];
-  for (let i = 0; i < count - 1; i++) {
-    if (i % 7 === 2 || i % 7 === 6) continue;
-    blacks.push(`<b style="left:calc((${i + 1}) / ${count} * 100% - 3%)"></b>`);
-  }
+  const whites = Array.from({ length: 7 }, () => "<i></i>").join("");
+  const blacks = [1, 2, 4, 5, 6]
+    .map((crack) => `<b style="left:${(crack / 7) * 100 - 4.4}%"></b>`)
+    .join("");
   return `
     <header class="masthead">
       <div class="brand">
@@ -256,8 +253,10 @@ function pieceDialog(piece) {
     <div class="sheet">
       <div class="sheet-card" role="dialog" aria-modal="true" aria-label="${piece.n}. ${esc(piece.author)}" tabindex="-1">
         <div class="sheet-nav">
-          <button class="ghost" type="button" data-action="learn-step" data-by="-1" ${atStart ? "disabled" : ""}>‹ Iepriekšējais</button>
-          <button class="ghost" type="button" data-action="learn-step" data-by="1" ${atEnd ? "disabled" : ""}>Nākamais ›</button>
+          <div class="sheet-steps">
+            <button class="ghost" type="button" data-action="learn-step" data-by="-1" ${atStart ? "disabled" : ""}>‹ Iepriekšējais</button>
+            <button class="ghost" type="button" data-action="learn-step" data-by="1" ${atEnd ? "disabled" : ""}>Nākamais ›</button>
+          </div>
           <button class="sheet-close" type="button" data-action="close-piece" aria-label="Aizvērt">×</button>
         </div>
         ${pieceCard(piece)}
