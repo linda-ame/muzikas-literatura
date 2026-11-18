@@ -46,7 +46,7 @@ export const pieces = [
   piece(39, "A.Kalniņš", 'simfoniskā idille "Mana dzimtene"', "lcaGBJqi268", 227, 1.1, 34),
   piece(40, "A.Kalniņš", 'solodziesma "Brīnos es"', "3d5U9LD7k-A", 255, 0.3, 34),
   piece(41, "Jānis Mediņš", "1.svīta orķestrim, Ārija", "BdzexUzgn_U", 290, 4.7, 34),
-  piece(42, "L. Garūta", 'kantāte "Dievs, Tava zeme deg!", sākumtēma', "-GDeuRCQReI", 154, 0, 90, true),
+  piece(42, "L. Garūta", 'kantāte "Dievs, Tava zeme deg!", sākumtēma', "xsQojVh6-g4", 2669, 0, 50, true),
   piece(43, "P. Barisons", 'kordziesma "Dziesmai šodien liela diena"', "jptNKu_Aws8", 157, 1.1, 70),
   piece(44, "J.Ivanovs", "14. simfonija, 1.daļa", "vtbmI-eRa74", 526, 1.3, 34),
   piece(45, "M.Zariņš", "Partita baroka stilā, Pavana", "MEbUvS-Gb8A", 66, 0.2, 60),
