@@ -22,6 +22,7 @@ const playerState = {
   player: null,
   clip: null,
   playing: false,
+  skipUntil: 0,
 };
 
 const app = document.querySelector("#app");
@@ -658,6 +659,28 @@ function stepPiece(by) {
   document.querySelector(".sheet-card")?.focus();
 }
 
+function advanceLearn() {
+  const clip = playerState.clip;
+  if (!clip?.learn || !playerState.playing) return;
+  const next = clip.n < pieces.length ? pieces.find((piece) => piece.n === clip.n + 1) : null;
+  playerState.playing = false;
+  playerState.skipUntil = performance.now() + 1500;
+  if (!next) {
+    try {
+      playerState.player?.pauseVideo();
+    } catch {
+      /* the player may already have stopped */
+    }
+    setLearnUi(clip.n, clip.duration, "Pēdējais gabals beidzās.");
+    return;
+  }
+  state.openN = next.n;
+  state.editor = { n: null, name: "", from: "", to: "", error: "" };
+  render();
+  playLearn(next, null);
+  document.querySelector(".sheet-card")?.focus();
+}
+
 function leaveQuiz() {
   stopPlayback();
   state.screen = "settings";
@@ -961,8 +984,20 @@ function onPlayerState(event) {
       setLearnUi(n, time, "Skan");
     }
     if (event.data === YT.PlayerState.ENDED || event.data === YT.PlayerState.PAUSED) {
+      if (performance.now() < playerState.skipUntil) return;
+      let time = 0;
+      try {
+        time = playerState.player.getCurrentTime();
+      } catch {
+        time = 0;
+      }
+      if (playerState.playing && time >= playerState.clip.end - 1.5) {
+        advanceLearn();
+        return;
+      }
+      if (!playerState.playing) return;
       playerState.playing = false;
-      setLearnUi(n, null, event.data === YT.PlayerState.ENDED ? "Gabals beidzās." : null);
+      setLearnUi(n, null, null);
     }
     return;
   }
@@ -1007,11 +1042,10 @@ function watchPlayback() {
     return;
   }
   if (playerState.clip.learn) {
-    const { end, n, duration } = playerState.clip;
+    const { end, n } = playerState.clip;
+    if (performance.now() < playerState.skipUntil) return;
     if (code === YT.PlayerState.PLAYING && time >= end - 0.25 && time < end + 4) {
-      playerState.player.pauseVideo();
-      playerState.playing = false;
-      setLearnUi(n, duration, "Gabals beidzās.");
+      advanceLearn();
       return;
     }
     if (code === YT.PlayerState.PLAYING) setLearnUi(n, time, `Skan · ${clock(time)}`);
