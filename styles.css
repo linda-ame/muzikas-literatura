@@ -217,6 +217,8 @@ input:focus, textarea:focus {
   border-color: var(--line);
 }
 
+.presets .chip { padding-inline: 12px; }
+
 .chip.is-on, .chip:hover, .ghost:hover, .step:hover { border-color: var(--ink); }
 
 .primary, .listen, .play {

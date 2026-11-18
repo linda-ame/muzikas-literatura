@@ -94,11 +94,17 @@ render();
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null");
-    if (saved && validSettings(saved)) return saved;
+    if (saved && validSettings(saved)) {
+      if (saved.from === 1 && saved.to === 15) {
+        saved.to = 20;
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(saved));
+      }
+      return saved;
+    }
   } catch {
     /* keep the default */
   }
-  return { from: 1, to: 15, mode: "all", feedback: "now" };
+  return { from: 1, to: 20, mode: "all", feedback: "now" };
 }
 
 function validSettings(value) {
@@ -360,7 +366,7 @@ function settingsView() {
           </label>
         </div>
         <div class="presets" style="margin-top:10px">
-          ${[15, 30, 50].map((end) => `<button type="button" class="chip ${to === end && from === 1 ? "is-on" : ""}" data-action="preset" data-to="${end}">1–${end}</button>`).join("")}
+          ${[20, 30, 40, 50].map((end) => `<button type="button" class="chip ${to === end && from === 1 ? "is-on" : ""}" data-action="preset" data-to="${end}">1–${end}</button>`).join("")}
         </div>
       </fieldset>
       <div class="split" style="margin-top:18px">
