@@ -339,6 +339,13 @@ input:focus, textarea:focus {
 
 .piece .details { margin: 4px 0 0; line-height: 1.4; }
 
+.note-swap {
+  margin: 6px 0 0;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--brass);
+}
+
 .clips {
   margin-top: 14px;
   padding-top: 12px;

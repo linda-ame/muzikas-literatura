@@ -243,6 +243,7 @@ function pieceCard(piece) {
         <div>
           <h2>${esc(piece.author)}</h2>
           <p class="details">${esc(piece.details)}</p>
+          ${piece.replaced ? `<p class="note-swap">Šis ieraksts nav no sākotnējās playlistes.</p>` : ""}
         </div>
       </div>
       <div class="transport" style="margin-top:12px">
