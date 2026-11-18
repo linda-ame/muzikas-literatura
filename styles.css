@@ -308,6 +308,69 @@ input:focus, textarea:focus {
   font-weight: 600;
 }
 
+.catalog { display: grid; gap: 8px; }
+
+.piece-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.piece-copy { display: grid; gap: 3px; min-width: 0; }
+
+.piece-copy strong {
+  font-family: Fraunces, Georgia, serif;
+  font-size: 1.05rem;
+  font-weight: 560;
+}
+
+.piece-row .details, .piece-row .note-swap { display: block; }
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(23, 26, 32, 0.46);
+}
+
+.sheet-card {
+  width: min(640px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 12px;
+  border-radius: 22px;
+  background: var(--bg);
+  outline: none;
+}
+
+.sheet-nav {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+
+.sheet-nav .ghost:last-child { justify-self: end; }
+
+.sheet-nav .ghost:disabled { opacity: 0.4; cursor: default; }
+
+body.sheet-open { overflow: hidden; }
+
 .piece {
   background: var(--card);
   border: 1px solid rgba(255, 255, 255, 0.85);
@@ -315,6 +378,18 @@ input:focus, textarea:focus {
   box-shadow: var(--shadow);
   padding: 16px;
 }
+
+.answer-full {
+  margin-top: 10px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+
+.answer-full p { margin: 0; }
+
+.answer-full p + p { margin-top: 6px; }
 
 .piece-top {
   display: grid;

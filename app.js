@@ -13,6 +13,7 @@ const state = {
   queue: [],
   index: 0,
   restored: false,
+  openN: null,
   editor: { n: null, name: "", from: "", to: "", error: "" },
 };
 
@@ -194,6 +195,7 @@ function render() {
     ${state.screen === "learn" ? learnView() : state.screen === "settings" ? settingsView() : state.screen === "summary" ? summaryView() : questionView()}
   `;
   if (state.screen !== "question" && state.screen !== "learn" && state.screen !== "summary") stopPlayback();
+  document.body.classList.toggle("sheet-open", state.screen === "learn" && state.openN != null);
   if (state.screen === "learn" && playerState.clip?.learn) {
     setLearnUi(playerState.clip.n, null, playerState.playing ? "Skan" : null);
   }
@@ -207,10 +209,7 @@ function shell(active) {
         <svg class="note" viewBox="0 0 48 48" aria-hidden="true">
           <path fill="currentColor" d="M20 6h3.2v22.2a6.2 6.2 0 1 1-3.2-5.4V6zm12.4 5.2H36v16.6a6.2 6.2 0 1 1-3.6-5.6V11.2z"/>
         </svg>
-        <div>
-          <p class="eyebrow">Pēc dzirdes</p>
-          <h1>Mūzikas literatūra</h1>
-        </div>
+        <h1>Mūzikas literatūra</h1>
       </div>
       <div class="piano" aria-hidden="true">${whites}</div>
     </header>
@@ -222,10 +221,41 @@ function shell(active) {
 }
 
 function learnView() {
+  const open = pieces.find((piece) => piece.n === state.openN);
   return `
-    <p class="lede">Te redzams viss saraksts. Play atskaņo ierakstu no mūzikas sākuma līdz beigām. Joslu var vilkt, un −15 / +15 patin pa 15 sekundēm.</p>
-    <div class="stack">
-      ${pieces.map((piece) => pieceCard(piece)).join("")}
+    <div class="catalog">
+      ${pieces.map((piece) => pieceRow(piece)).join("")}
+    </div>
+    ${open ? pieceDialog(open) : ""}
+  `;
+}
+
+function pieceRow(piece) {
+  return `
+    <button class="piece-row" type="button" data-action="open-piece" data-n="${piece.n}">
+      <span class="num">${String(piece.n).padStart(2, "0")}</span>
+      <span class="piece-copy">
+        <strong>${esc(piece.author)}</strong>
+        <span class="details">${esc(piece.details)}</span>
+        ${piece.replaced ? `<span class="note-swap">Šis ieraksts nav no sākotnējās playlistes.</span>` : ""}
+      </span>
+    </button>
+  `;
+}
+
+function pieceDialog(piece) {
+  const atStart = piece.n === 1;
+  const atEnd = piece.n === pieces.length;
+  return `
+    <div class="sheet">
+      <div class="sheet-card" role="dialog" aria-modal="true" aria-label="${piece.n}. ${esc(piece.author)}" tabindex="-1">
+        <div class="sheet-nav">
+          <button class="ghost" type="button" data-action="learn-step" data-by="-1" ${atStart ? "disabled" : ""}>Iepriekšējais</button>
+          <button class="icon" type="button" data-action="close-piece" aria-label="Aizvērt">×</button>
+          <button class="ghost" type="button" data-action="learn-step" data-by="1" ${atEnd ? "disabled" : ""}>Nākamais</button>
+        </div>
+        ${pieceCard(piece)}
+      </div>
     </div>
   `;
 }
@@ -357,7 +387,7 @@ function questionView() {
   return `
     <section class="card">
       <div class="progress">
-        <strong>Gabals ${state.index + 1} no ${total}</strong>
+        <strong>${state.index + 1}. no ${total}</strong>
         <button class="tiny" type="button" data-action="settings">Mainīt iestatījumus</button>
       </div>
       <p class="quiet">${state.settings.feedback === "now" ? "Atbilde redzama uzreiz" : "Atbildes būs beigās"}</p>
@@ -371,7 +401,7 @@ function questionView() {
           <input type="text" name="author" data-field="author" value="${esc(item.authorInput)}" autocomplete="off" autocapitalize="off" lang="lv" ${show ? "readonly" : ""} />
         </label>
         <label class="field">Pārējā informācija
-          <textarea name="details" data-field="details" lang="lv" placeholder="žanrs, nosaukums, daļa — viss, kas sarakstā ir aiz autora" ${show ? "readonly" : ""}>${esc(item.detailsInput)}</textarea>
+          <textarea name="details" data-field="details" lang="lv" ${show ? "readonly" : ""}>${esc(item.detailsInput)}</textarea>
         </label>
         ${show ? resultBlock(item) : `
           <div class="actions">
@@ -425,29 +455,23 @@ function reviewItem(item) {
         <span class="mark ${kind}">${label}</span>
       </header>
       <p>${esc(answerText(item.piece))}</p>
-      <p class="quiet">Tava atbilde: ${esc(item.authorInput || "—")} / ${esc(item.detailsInput || "—")}</p>
-      ${item.missing?.length && !item.detailsOk ? `<p class="quiet">Pietrūkst: ${esc(item.missing.join(", "))}</p>` : ""}
       <button class="tiny" type="button" data-action="play-piece" data-n="${item.piece.n}">Klausīties</button>
     </article>
   `;
 }
 
 function resultBlock(item) {
-  const kind = markKind(item);
-  const heading = item.swapped
-    ? "Lauki ir samainīti vietām."
-    : kind === "good"
-      ? "Pareizi."
-      : kind === "part"
-        ? "Daļēji pareizi."
-        : "Nepareizi.";
+  if (item.authorOk && item.detailsOk) {
+    return `<div class="result good"><h3>Pareizi.</h3></div>`;
+  }
+  const verdict = !item.authorOk && !item.detailsOk
+    ? "Nepareizi."
+    : `${item.authorOk ? "Autors pareizi." : "Autors nepareizi."} ${item.detailsOk ? "Informācija pareizi." : "Informācija nepareizi."}`;
   return `
-    <div class="result ${kind}">
-      <h3>${heading}</h3>
-      ${item.authorInOtherField && !item.swapped ? `<p>Autors ir ierakstīts otrajā laukā.</p>` : ""}
-      <p><strong>Autors.</strong> ${item.authorOk ? "Pareizi." : `Jābūt: ${esc(item.piece.author)}`}</p>
-      <p><strong>Pārējā informācija.</strong> ${item.detailsOk ? "Pareizi." : `Jābūt: ${esc(answerText(item.piece))}`}</p>
-      ${!item.detailsOk && item.missing.length ? `<p>Pietrūkst: ${esc(item.missing.join(", "))}</p>` : ""}
+    <div class="result ${markKind(item)}"><h3>${verdict}</h3></div>
+    <div class="answer-full">
+      <p>${esc(item.piece.author)}</p>
+      <p>${esc(answerText(item.piece))}</p>
     </div>
   `;
 }
@@ -522,6 +546,10 @@ function onSubmit(event) {
 }
 
 function onClick(event) {
+  if (event.target.classList?.contains("sheet")) {
+    closePiece();
+    return;
+  }
   const button = event.target.closest("[data-action]");
   if (!button) return;
   const action = button.dataset.action;
@@ -552,6 +580,7 @@ function onClick(event) {
   } else if (action === "goto-quiz") {
     if (state.screen === "learn") {
       stopPlayback();
+      state.openN = null;
       state.screen = "settings";
       render();
     } else if (state.screen === "summary") {
@@ -590,7 +619,32 @@ function onClick(event) {
     const n = Number(button.dataset.n);
     writeEntry(n, removeClip(entryFor(n), button.dataset.id));
     render();
+  } else if (action === "open-piece") {
+    state.openN = Number(button.dataset.n);
+    render();
+    document.querySelector(".sheet-card")?.focus();
+  } else if (action === "close-piece") {
+    closePiece();
+  } else if (action === "learn-step") {
+    stepPiece(Number(button.dataset.by));
   }
+}
+
+function closePiece() {
+  stopPlayback();
+  state.openN = null;
+  state.editor = { n: null, name: "", from: "", to: "", error: "" };
+  render();
+}
+
+function stepPiece(by) {
+  const next = state.openN + by;
+  if (next < 1 || next > pieces.length) return;
+  stopPlayback();
+  state.editor = { n: null, name: "", from: "", to: "", error: "" };
+  state.openN = next;
+  render();
+  document.querySelector(".sheet-card")?.focus();
 }
 
 function leaveQuiz() {
@@ -841,6 +895,20 @@ function moveScrub(event) {
 }
 
 function onKeyDown(event) {
+  if (state.screen === "learn" && state.openN && event.key === "Escape") {
+    closePiece();
+    return;
+  }
+  if (
+    state.screen === "learn" &&
+    state.openN &&
+    (event.key === "ArrowRight" || event.key === "ArrowLeft") &&
+    !event.target.closest?.("input, textarea, [data-scrub]")
+  ) {
+    event.preventDefault();
+    stepPiece(event.key === "ArrowRight" ? 1 : -1);
+    return;
+  }
   const scrub = event.target.closest?.("[data-scrub]");
   if (!scrub) return;
   const piece = pieces.find((entry) => entry.n === Number(scrub.dataset.scrub));
