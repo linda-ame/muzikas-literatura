@@ -1,11 +1,15 @@
 import { pieces, clipBounds } from "./pieces.js";
-import { answerText, checkAnswer } from "./check.js";
+import { answerText, checkAnswer, normalize } from "./check.js";
 import { DEFAULT_ID, addClip, blankEntry, chooseClip, rangeError, removeClip, resolveBounds, sanitizeEntry } from "./clips.js";
+import { choiceTexts, clipNumbers, fieldOk, layers } from "./layers.js?v=3";
 
 const TEST_SIZE = 10;
 const SETTINGS_KEY = "ml-settings";
 const SESSION_KEY = "ml-session";
 const CLIPS_KEY = "ml-clips";
+const HISTORY_KEY = "ml-quiz-history";
+const ASSEMBLE_KEY = "ml-assemble";
+const ASSEMBLE_SESSION_KEY = "ml-assemble-session";
 
 const state = {
   screen: "learn",
@@ -15,6 +19,10 @@ const state = {
   restored: false,
   openN: null,
   editor: { n: null, name: "", from: "", to: "", error: "" },
+  assemble: loadAssemble(),
+  assembleQueue: [],
+  assembleIndex: 0,
+  historyLogged: false,
 };
 
 const playerState = {
@@ -89,6 +97,7 @@ document.head.appendChild(api);
 setInterval(watchPlayback, 250);
 
 restoreSession();
+restoreAssembleSession();
 render();
 
 function loadSettings() {
@@ -99,12 +108,13 @@ function loadSettings() {
         saved.to = 20;
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(saved));
       }
+      saved.hints = saved.hints === true;
       return saved;
     }
   } catch {
     /* keep the default */
   }
-  return { from: 1, to: 20, mode: "all", feedback: "now" };
+  return { from: 1, to: 20, mode: "all", feedback: "now", hints: false };
 }
 
 function validSettings(value) {
@@ -158,6 +168,7 @@ function saveSession() {
       settings: state.settings,
       index: state.index,
       screen: state.screen,
+      historyLogged: state.historyLogged,
       queue: state.queue.map((item) => ({
         n: item.piece.n,
         start: item.start,
@@ -171,6 +182,13 @@ function saveSession() {
         swapped: item.swapped,
         authorInOtherField: item.authorInOtherField,
         heard: item.heard,
+        attempted: item.attempted,
+        authorOptions: item.authorOptions,
+        detailsOptions: item.detailsOptions,
+        authorWrong: item.authorWrong,
+        detailsWrong: item.detailsWrong,
+        authorFixed: item.authorFixed,
+        detailsFixed: item.detailsFixed,
       })),
     }),
   );
@@ -183,11 +201,22 @@ function restoreSession() {
     const queue = saved.queue.map((item) => {
       const piece = pieces.find((entry) => entry.n === item.n);
       if (!piece) throw new Error("missing piece");
-      return { piece, ...item };
+      return {
+        piece,
+        authorOptions: null,
+        detailsOptions: null,
+        authorWrong: [],
+        detailsWrong: [],
+        authorFixed: false,
+        detailsFixed: false,
+        attempted: false,
+        ...item,
+      };
     });
     state.settings = saved.settings;
     state.queue = queue;
     state.index = Math.min(saved.index, queue.length - 1);
+    state.historyLogged = saved.historyLogged === true;
     state.screen = saved.screen === "summary" || saved.screen === "question" ? saved.screen : "settings";
     state.restored = state.screen !== "settings";
   } catch {
@@ -197,15 +226,28 @@ function restoreSession() {
 
 function render() {
   const quiz = state.screen === "settings" || state.screen === "question" || state.screen === "summary";
+  const assemble = state.screen === "assemble" || state.screen === "assemble-card" || state.screen === "assemble-done";
+  const keepSound = state.screen === "question" || state.screen === "learn" || state.screen === "summary" || state.screen === "assemble-card";
   app.innerHTML = `
-    ${shell(quiz ? "quiz" : "learn")}
-    ${state.screen === "learn" ? learnView() : state.screen === "settings" ? settingsView() : state.screen === "summary" ? summaryView() : questionView()}
+    ${shell(assemble ? "assemble" : quiz ? "quiz" : "learn")}
+    ${screenView()}
   `;
-  if (state.screen !== "question" && state.screen !== "learn" && state.screen !== "summary") stopPlayback();
+  if (!keepSound) stopPlayback();
   document.body.classList.toggle("sheet-open", state.screen === "learn" && state.openN != null);
   if (state.screen === "learn" && playerState.clip?.learn) {
     setLearnUi(playerState.clip.n, null, playerState.playing ? "Skan" : null);
   }
+  if (state.screen === "assemble-card" && playerState.clip?.assemble) markAssemblePlaying();
+}
+
+function screenView() {
+  if (state.screen === "learn") return learnView();
+  if (state.screen === "settings") return settingsView();
+  if (state.screen === "summary") return summaryView();
+  if (state.screen === "assemble") return assembleSetup();
+  if (state.screen === "assemble-card") return assembleCard();
+  if (state.screen === "assemble-done") return assembleDone();
+  return questionView();
 }
 
 function shell(active) {
@@ -225,6 +267,7 @@ function shell(active) {
     </header>
     <nav class="modes">
       <button type="button" data-action="goto-learn" class="${active === "learn" ? "is-on" : ""}">Mācīties</button>
+      <button type="button" data-action="goto-assemble" class="${active === "assemble" ? "is-on" : ""}">Savienot</button>
       <button type="button" data-action="goto-quiz" class="${active === "quiz" ? "is-on" : ""}">Pārbaudīt sevi</button>
     </nav>
   `;
@@ -381,6 +424,11 @@ function settingsView() {
           <label class="radio"><input type="radio" name="feedback" value="end" ${feedback === "end" ? "checked" : ""} /> Kad visi gabali ir pabeigti</label>
         </fieldset>
       </div>
+      <fieldset style="margin-top:18px">
+        <legend>Atbilžu varianti</legend>
+        <label class="radio"><input type="checkbox" name="hints" ${state.settings.hints ? "checked" : ""} /> Piedāvāt variantus pēc pieprasījuma</label>
+        <p class="quiet">Ja atbilde nav pareiza, varianti atveras paši. Ķeksis pieliek katram laukam savu pogu vēl pirms iesniegšanas.</p>
+      </fieldset>
       <p class="plan" id="plan-text">${planText(state.settings)}</p>
       <div class="actions" style="margin-top:16px">
         <button class="primary" type="submit">Sākt</button>
@@ -396,6 +444,8 @@ function questionView() {
   const total = state.queue.length;
   const show = item.answered && state.settings.feedback === "now";
   const length = Math.max(1, Math.round(item.end - item.start));
+  const pending = item.attempted && !item.answered;
+  const nextLabel = state.index + 1 === total ? "Skatīt rezultātu" : "Nākamais gabals";
   return `
     <section class="card">
       <div class="progress">
@@ -408,46 +458,87 @@ function questionView() {
       <p class="status" id="clip-status">${item.heard ? "Vari klausīties vēlreiz vai rakstīt atbildi." : `Fragments ilgst apmēram ${length} s. Ja vispirms ir reklāma, pagaidi.`}</p>
       <div class="meter" aria-hidden="true"><span id="clip-bar"></span></div>
       <form id="answer-form" class="stack">
-        <label class="field">Autors
-          <input type="text" name="author" data-field="author" value="${esc(item.authorInput)}" autocomplete="off" autocapitalize="off" lang="lv" ${show ? "readonly" : ""} />
-        </label>
-        <label class="field">Pārējā informācija
-          <textarea name="details" data-field="details" lang="lv" rows="2" ${show ? "readonly" : ""}>${esc(item.detailsInput)}</textarea>
-        </label>
-        ${show ? resultBlock(item) : `
+        <div>
+          <label class="field">Autors
+            <input class="${fieldClass(item, "author")}" type="text" name="author" data-field="author" value="${esc(item.authorInput)}" autocomplete="off" autocapitalize="off" lang="lv" ${fieldLocked(item, "author") ? "readonly" : ""} />
+          </label>
+          ${quizAsk(item, "author")}
+          ${quizOptionList(item, "author")}
+        </div>
+        <div>
+          <label class="field">Pārējā informācija
+            <textarea class="${fieldClass(item, "details")}" name="details" data-field="details" lang="lv" rows="2" ${fieldLocked(item, "details") ? "readonly" : ""}>${esc(item.detailsInput)}</textarea>
+          </label>
+          ${quizAsk(item, "details")}
+          ${quizOptionList(item, "details")}
+        </div>
+        ${show ? resultBlock(item) : ""}
+        ${show || pending ? `<div class="actions"><button class="primary" type="button" data-action="next">${nextLabel}</button></div>` : `
           <div class="actions">
             <button class="primary" type="submit">Iesniegt atbildi</button>
             <button class="ghost" type="button" data-action="skip">Nezinu</button>
           </div>
         `}
-        ${show ? `<div class="actions"><button class="primary" type="button" data-action="next">${state.index + 1 === total ? "Skatīt rezultātu" : "Nākamais gabals"}</button></div>` : ""}
       </form>
     </section>
   `;
 }
 
+function fieldClass(item, field) {
+  if (item[`${field}Ok`] || item[`${field}Fixed`]) return "is-good";
+  if (item.attempted) return "is-bad";
+  return "";
+}
+
+function fieldLocked(item, field) {
+  if (item.answered || item[`${field}Fixed`] || item[`${field}Ok`]) return true;
+  return Boolean(item.attempted);
+}
+
+function quizAsk(item, field) {
+  if (!state.settings.hints || item.attempted || item.answered) return "";
+  if (item[`${field}Options`] || item[`${field}Fixed`] || item[`${field}Ok`]) return "";
+  return `<div class="actions"><button class="ghost" type="button" data-action="quiz-show" data-field="${field}">Parādīt variantus</button></div>`;
+}
+
+function quizOptionList(item, field) {
+  const options = item[`${field}Options`];
+  if (!options || item.answered || item[`${field}Ok`] || item[`${field}Fixed`]) return "";
+  const wrong = item[`${field}Wrong`] || [];
+  return `<div class="options">${options.map((option, index) => {
+    const missed = wrong.includes(index);
+    return `<button class="option ${missed ? "is-bad" : ""}" type="button" data-action="quiz-option" data-field="${field}" data-index="${index}" ${missed ? "disabled" : ""}>${missed ? "✕ " : ""}${esc(option.text)}</button>`;
+  }).join("")}</div>`;
+}
+
 function summaryView() {
+  rememberRound();
   const total = state.queue.length;
-  const authors = state.queue.filter((item) => item.authorOk).length;
-  const infos = state.queue.filter((item) => item.detailsOk).length;
-  const both = state.queue.filter((item) => item.authorOk && item.detailsOk).length;
+  const counts = { self: 0, help: 0, weak: 0 };
+  for (const item of state.queue) counts[pieceOutcome(item)] += 1;
   const title = state.settings.mode === "test"
     ? (total === 1 ? "Tests pabeigts. Noklausīts 1 gabals." : `Tests pabeigts. Noklausīti ${total} gabali.`)
     : (total === 1 ? "Vienīgais gabals ir noklausīts." : `Visi ${total} gabali ir noklausīti.`);
+  const groups = [
+    ["weak", "Jāatkārto"],
+    ["help", "Ar variantiem"],
+    ["self", "Sanāk labi"],
+  ];
   return `
     <section class="card">
       <h2>Rezultāts</h2>
       <p class="lede">${title}</p>
       <div class="scores">
-        <div class="score"><b>${both}/${total}</b> abi pareizi</div>
-        <div class="score"><b>${authors}/${total}</b> autors</div>
-        <div class="score"><b>${infos}/${total}</b> pārējā informācija</div>
+        <div class="score"><b>${counts.self}/${total}</b> pats zināja</div>
+        <div class="score"><b>${counts.help}/${total}</b> ar variantiem</div>
+        <div class="score"><b>${counts.weak}/${total}</b> jāatkārto</div>
       </div>
+      <p class="analysis">${fieldTally("author", "Autors")}</p>
+      <p class="analysis">${fieldTally("details", "Pārējā informācija")}</p>
       <p class="status" id="clip-status">Vari noklausīties jebkuru gabalu vēlreiz.</p>
       <div class="meter" aria-hidden="true"><span id="clip-bar"></span></div>
-      <div class="review" style="margin-top:16px">
-        ${state.queue.map((item) => reviewItem(item)).join("")}
-      </div>
+      ${groups.map(([key, label]) => outcomeGroup(key, label)).join("")}
+      ${historyBlock()}
       <div class="actions" style="margin-top:18px">
         <button class="primary" type="button" data-action="again">Sākt no jauna</button>
         <button class="ghost" type="button" data-action="settings">Mainīt iestatījumus</button>
@@ -456,9 +547,50 @@ function summaryView() {
   `;
 }
 
+function outcomeGroup(key, label) {
+  const items = state.queue.filter((item) => pieceOutcome(item) === key);
+  if (!items.length) return "";
+  return `
+    <h3 class="group-title">${label}</h3>
+    <div class="review">
+      ${items.map((item) => reviewItem(item)).join("")}
+    </div>
+  `;
+}
+
+function fieldTally(field, label) {
+  const counts = { self: 0, help: 0, miss: 0 };
+  for (const item of state.queue) counts[fieldOutcome(item, field)] += 1;
+  return `${label} — ${counts.self} pats, ${counts.help} ar variantiem, ${counts.miss} jāatkārto.`;
+}
+
+function fieldOutcome(item, field) {
+  if (item[`${field}Fixed`] || (item[`${field}Ok`] && item[`${field}Options`])) return "help";
+  if (item[`${field}Ok`]) return "self";
+  return "miss";
+}
+
+function pieceOutcome(item) {
+  const author = fieldOutcome(item, "author");
+  const details = fieldOutcome(item, "details");
+  if (author === "miss" || details === "miss") return "weak";
+  if (author === "help" || details === "help") return "help";
+  return "self";
+}
+
+function outcomeNote(item) {
+  const author = fieldOutcome(item, "author");
+  const details = fieldOutcome(item, "details");
+  if (author === details && author === "self") return "";
+  const phrase = (value) => (value === "self" ? "zināja pats" : value === "help" ? "ar variantiem" : "jāatkārto");
+  return `Autors — ${phrase(author)}. Pārējā informācija — ${phrase(details)}.`;
+}
+
 function reviewItem(item) {
-  const kind = markKind(item);
-  const label = kind === "good" ? "Pareizi" : kind === "part" ? "Daļēji" : "Nepareizi";
+  const outcome = pieceOutcome(item);
+  const kind = outcome === "self" ? "good" : outcome === "help" ? "part" : "bad";
+  const label = outcome === "self" ? "Pats" : outcome === "help" ? "Ar variantiem" : "Jāatkārto";
+  const note = outcomeNote(item);
   return `
     <article class="item">
       <header>
@@ -466,7 +598,83 @@ function reviewItem(item) {
         <span class="mark ${kind}">${label}</span>
       </header>
       <p>${esc(answerText(item.piece))}</p>
+      ${note ? `<p class="quiet">${esc(note)}</p>` : ""}
       <button class="tiny" type="button" data-action="play-piece" data-n="${item.piece.n}">Klausīties</button>
+    </article>
+  `;
+}
+
+function rememberRound() {
+  if (state.historyLogged || !state.queue.length) return;
+  const history = loadHistory();
+  for (const item of state.queue) {
+    const slot = historySlot(history, item.piece.n);
+    slot.tries += 1;
+    slot[pieceOutcome(item)] += 1;
+    history[item.piece.n] = slot;
+  }
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  state.historyLogged = true;
+  saveSession();
+}
+
+function loadHistory() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(HISTORY_KEY) || "{}");
+    if (!saved || typeof saved !== "object") return {};
+    return saved;
+  } catch {
+    return {};
+  }
+}
+
+function historySlot(history, n) {
+  const raw = history[n] || {};
+  return {
+    tries: Number(raw.tries) || 0,
+    self: Number(raw.self) || 0,
+    help: Number(raw.help) || 0,
+    weak: Number(raw.weak) || 0,
+  };
+}
+
+function historyBlock() {
+  const rows = pieces.map((piece) => ({ piece, ...historySlot(loadHistory(), piece.n) })).filter((row) => row.tries >= 2);
+  const trouble = (row) => row.weak + row.help;
+  const repeat = rows
+    .filter((row) => trouble(row) > row.self)
+    .sort((a, b) => trouble(b) - trouble(a) || b.weak - a.weak || a.piece.n - b.piece.n)
+    .slice(0, 6);
+  const strong = rows
+    .filter((row) => row.self > trouble(row))
+    .sort((a, b) => b.self - a.self || a.piece.n - b.piece.n)
+    .slice(0, 6);
+  const even = rows
+    .filter((row) => row.self > 0 && row.self === trouble(row))
+    .sort((a, b) => b.tries - a.tries || a.piece.n - b.piece.n)
+    .slice(0, 6);
+  if (!repeat.length && !strong.length && !even.length) return "";
+  return `
+    <h3 class="group-title">No visām reizēm</h3>
+    ${repeat.length ? `<p class="analysis">Biežāk jāatkārto</p><div class="review">${repeat.map(historyRow).join("")}</div>` : ""}
+    ${strong.length ? `<p class="analysis">Sanāk labi arī citās reizēs</p><div class="review">${strong.map(historyRow).join("")}</div>` : ""}
+    ${even.length ? `<p class="analysis">Tikpat bieži pats un ar palīdzību</p><div class="review">${even.map(historyRow).join("")}</div>` : ""}
+  `;
+}
+
+function historyRow(row) {
+  const trouble = row.weak + row.help;
+  const line = row.self === row.tries
+    ? `${row.self} no ${row.tries} reizēm pats`
+    : trouble === row.tries
+      ? `${trouble} no ${row.tries} reizēm vajag palīdzību vai atkārtojumu`
+      : `${row.self} no ${row.tries} reizēm pats, ${trouble} ar palīdzību vai jāatkārto`;
+  return `
+    <article class="item">
+      <header>
+        <h3>${row.piece.n}. ${esc(row.piece.author)}</h3>
+      </header>
+      <p class="quiet">${line}</p>
     </article>
   `;
 }
@@ -521,6 +729,24 @@ function onInput(event) {
     return;
   }
   const field = event.target.dataset.field;
+  if (field === "assemble-author" || field === "assemble-part" || field === "assemble-work") {
+    const card = currentAssemble();
+    const key = field.slice("assemble-".length);
+    if (!card || card[`${key}Status`] !== "open") return;
+    card[`${key}Input`] = event.target.value;
+    saveAssembleSession(false);
+    return;
+  }
+  if (field === "assemble-from" || field === "assemble-to") {
+    state.assemble[field === "assemble-from" ? "from" : "to"] = Number(event.target.value);
+    saveAssembleSettings();
+    const plan = document.querySelector("#assemble-plan");
+    if (plan) {
+      plan.textContent = assemblePlan(state.assemble);
+      plan.classList.remove("warn");
+    }
+    return;
+  }
   if (field === "author" || field === "details") {
     const item = current();
     if (!item || item.answered) return;
@@ -537,6 +763,24 @@ function onInput(event) {
 }
 
 function onChange(event) {
+  if (event.target.name === "assemble-direction") {
+    state.assemble.direction = event.target.value === "part" ? "part" : "work";
+    saveAssembleSettings();
+    render();
+    return;
+  }
+  if (event.target.name === "assemble-listen") {
+    state.assemble.listen = event.target.value === "yes";
+    saveAssembleSettings();
+    const plan = document.querySelector("#assemble-plan");
+    if (plan) plan.textContent = assemblePlan(state.assemble);
+    return;
+  }
+  if (event.target.name === "hints") {
+    state.settings.hints = event.target.checked;
+    saveSettings();
+    return;
+  }
   if (event.target.name === "mode" || event.target.name === "feedback") {
     state.settings[event.target.name] = event.target.value;
     saveSettings();
@@ -560,6 +804,18 @@ function onSubmit(event) {
     begin(false);
     return;
   }
+  if (event.target.id === "assemble-form") {
+    const settings = readAssembleForm();
+    if (settings) startAssemble(settings);
+    return;
+  }
+  if (event.target.id === "assemble-card-form") {
+    const focused = document.activeElement?.dataset?.field;
+    if (focused === "assemble-author") checkAssemble("author");
+    else if (focused === "assemble-part") checkAssemble("part");
+    else if (focused === "assemble-work") checkAssemble("work");
+    return;
+  }
   if (event.target.id === "answer-form") submitCurrent(false);
 }
 
@@ -576,6 +832,11 @@ function onClick(event) {
     state.settings.to = Number(button.dataset.to);
     saveSettings();
     render();
+  } else if (action === "assemble-preset") {
+    state.assemble.from = 1;
+    state.assemble.to = Number(button.dataset.to);
+    saveAssembleSettings();
+    render();
   } else if (action === "resume") {
     const saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
     if (saved?.screen) state.screen = saved.screen;
@@ -587,29 +848,51 @@ function onClick(event) {
   } else if (action === "goto-learn") {
     if (state.screen === "learn") return;
     if (state.screen === "question" && !confirm("Pārtraukt šo reizi un iet mācīties?")) return;
+    if (state.screen === "assemble-card" && !confirm("Aiziet mācīties? Šo reizi varēs turpināt.")) return;
+    if (state.screen === "question" || state.screen === "summary") {
+      state.queue = [];
+      state.restored = false;
+      saveSession();
+    }
+    if (state.screen === "assemble-card") saveAssembleSession(true);
+    stopPlayback();
+    state.openN = null;
+    state.screen = "learn";
+    render();
+  } else if (action === "goto-quiz") {
+    if (state.screen === "settings" || state.screen === "question") return;
+    if (state.screen === "assemble-card" && !confirm("Aiziet uz pārbaudi? Šo reizi varēs turpināt.")) return;
+    if (state.screen === "assemble-card") saveAssembleSession(true);
+    if (state.screen === "summary") {
+      leaveQuiz();
+      return;
+    }
+    stopPlayback();
+    state.openN = null;
+    state.screen = "settings";
+    render();
+  } else if (action === "goto-assemble") {
+    if (state.screen === "assemble" || state.screen === "assemble-card") return;
+    if (state.screen === "question" && !confirm("Pārtraukt šo reizi un iet savienot?")) return;
     if (state.screen === "question" || state.screen === "summary") {
       state.queue = [];
       state.restored = false;
       saveSession();
     }
     stopPlayback();
-    state.screen = "learn";
+    state.openN = null;
+    state.screen = "assemble";
     render();
-  } else if (action === "goto-quiz") {
-    if (state.screen === "learn") {
-      stopPlayback();
-      state.openN = null;
-      state.screen = "settings";
-      render();
-    } else if (state.screen === "summary") {
-      leaveQuiz();
-    }
   } else if (action === "again") {
     begin(true);
   } else if (action === "toggle-play") {
     togglePlay();
   } else if (action === "skip") {
     submitCurrent(true);
+  } else if (action === "quiz-show") {
+    showQuizOptions(button.dataset.field);
+  } else if (action === "quiz-option") {
+    pickQuizOption(button.dataset.field, Number(button.dataset.index));
   } else if (action === "next") {
     goNext();
   } else if (action === "play-piece") {
@@ -645,6 +928,28 @@ function onClick(event) {
     closePiece();
   } else if (action === "learn-step") {
     stepPiece(Number(button.dataset.by));
+  } else if (action === "assemble-resume") {
+    resumeAssemble();
+  } else if (action === "assemble-setup") {
+    if (state.screen === "assemble-card" && !confirm("Mainīt izvēli? Šo reizi varēs turpināt, kamēr nesāksi jaunu.")) return;
+    if (state.screen === "assemble-card") saveAssembleSession(true);
+    stopPlayback();
+    state.screen = "assemble";
+    render();
+  } else if (action === "assemble-again") {
+    startAssemble(state.assemble);
+  } else if (action === "assemble-check") {
+    checkAssemble(button.dataset.field);
+  } else if (action === "assemble-show") {
+    showAssembleOptions(button.dataset.field);
+  } else if (action === "assemble-option") {
+    pickAssembleOption(button.dataset.field, Number(button.dataset.index));
+  } else if (action === "assemble-step") {
+    stepAssemble(Number(button.dataset.by));
+  } else if (action === "assemble-play") {
+    toggleAssemblePlay(Number(button.dataset.n));
+  } else if (action === "assemble-pick") {
+    pickAssembleClip(Number(button.dataset.n));
   }
 }
 
@@ -656,12 +961,21 @@ function closePiece() {
 }
 
 function stepPiece(by) {
-  const next = state.openN + by;
-  if (next < 1 || next > pieces.length) return;
-  stopPlayback();
+  const nextN = state.openN + by;
+  if (nextN < 1 || nextN > pieces.length) return;
+  const keepPlaying = playerState.playing && playerState.clip?.learn && playerState.clip.n === state.openN;
+  const next = pieces.find((piece) => piece.n === nextN);
   state.editor = { n: null, name: "", from: "", to: "", error: "" };
-  state.openN = next;
-  render();
+  state.openN = nextN;
+  if (keepPlaying && next) {
+    playerState.playing = false;
+    playerState.skipUntil = performance.now() + 1500;
+    render();
+    playLearn(next, null);
+  } else {
+    stopPlayback();
+    render();
+  }
   document.querySelector(".sheet-card")?.focus();
 }
 
@@ -738,9 +1052,17 @@ function begin(keepSettings) {
     swapped: false,
     authorInOtherField: false,
     heard: false,
+    attempted: false,
+    authorOptions: null,
+    detailsOptions: null,
+    authorWrong: [],
+    detailsWrong: [],
+    authorFixed: false,
+    detailsFixed: false,
   }));
   state.index = 0;
   state.screen = "question";
+  state.historyLogged = false;
   state.restored = false;
   stopPlayback();
   saveSession();
@@ -753,7 +1075,8 @@ function readSettingsFromForm() {
   const to = Number(document.querySelector("[name='to']")?.value);
   const mode = document.querySelector("[name='mode']:checked")?.value || state.settings.mode;
   const feedback = document.querySelector("[name='feedback']:checked")?.value || state.settings.feedback;
-  const next = { from, to, mode, feedback };
+  const hints = document.querySelector("[name='hints']")?.checked === true;
+  const next = { from, to, mode, feedback, hints };
   if (!validSettings(next)) {
     const plan = document.querySelector("#plan-text");
     if (plan) {
@@ -767,21 +1090,102 @@ function readSettingsFromForm() {
 
 function submitCurrent(blank) {
   const item = current();
-  if (!item || item.answered) return;
+  if (!item || item.answered || item.attempted) return;
   if (blank) {
     item.authorInput = "";
     item.detailsInput = "";
+    item.authorFixed = false;
+    item.detailsFixed = false;
   } else {
-    item.authorInput = document.querySelector("[data-field='author']")?.value ?? item.authorInput;
-    item.detailsInput = document.querySelector("[data-field='details']")?.value ?? item.detailsInput;
+    if (!item.authorFixed) item.authorInput = document.querySelector("[data-field='author']")?.value ?? item.authorInput;
+    if (!item.detailsFixed) item.detailsInput = document.querySelector("[data-field='details']")?.value ?? item.detailsInput;
   }
   const result = checkAnswer(item.piece, item.authorInput, item.detailsInput);
-  Object.assign(item, result, { answered: true });
+  if (item.authorFixed) result.authorOk = true;
+  if (item.detailsFixed) result.detailsOk = true;
+  Object.assign(item, result, { attempted: true });
+  const open = state.settings.feedback === "now" && (!item.authorOk || !item.detailsOk);
+  item.answered = !open;
+  if (open) {
+    if (!item.authorOk) ensureQuizOptions(item, "author");
+    if (!item.detailsOk) ensureQuizOptions(item, "details");
+  }
   if (state.settings.feedback === "end") goNext();
   else {
     saveSession();
     render();
   }
+}
+
+function showQuizOptions(field) {
+  const item = current();
+  if (!item || item.answered || item.attempted || !state.settings.hints) return;
+  if (field !== "author" && field !== "details") return;
+  ensureQuizOptions(item, field);
+  saveSession();
+  render();
+}
+
+function ensureQuizOptions(item, field) {
+  if (item[`${field}Options`]) return;
+  const session = layers.filter((layer) => layer.n >= state.settings.from && layer.n <= state.settings.to);
+  const layer = layers.find((entry) => entry.n === item.piece.n);
+  const correct = field === "author" ? item.piece.author : prettyDetails(item.piece);
+  const texts = field === "author" ? choiceTexts(layer, "author", session) : detailChoiceTexts(item.piece, session);
+  item[`${field}Options`] = texts.map((text) => ({ text, correct: text === correct }));
+  item[`${field}Wrong`] = [];
+}
+
+function detailChoiceTexts(piece, session) {
+  const layer = layers.find((item) => item.n === piece.n);
+  const correct = prettyDetails(piece);
+  const ranked = [
+    session.filter((item) => sameKind(item, layer)),
+    layers.filter((item) => sameKind(item, layer)),
+    layers.filter((item) => item.n !== piece.n && item.region === layer.region),
+  ];
+  const seen = new Set([normalize(correct)]);
+  const picked = [];
+  for (const group of ranked) {
+    for (const item of shuffle(group)) {
+      const text = prettyDetails(pieces.find((entry) => entry.n === item.n));
+      const key = normalize(text);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      picked.push(text);
+      if (picked.length === 4) return shuffle([correct, ...picked]);
+    }
+  }
+  return shuffle([correct, ...picked]);
+}
+
+function sameKind(item, layer) {
+  return item.n !== layer.n && item.region === layer.region && item.kind === layer.kind;
+}
+
+function prettyDetails(piece) {
+  return answerText(piece).replace(/\s*\/\s*/g, " / ");
+}
+
+function pickQuizOption(field, index) {
+  const item = current();
+  const option = item?.[`${field}Options`]?.[index];
+  if (!item || !option || item.answered || item[`${field}Ok`] || item[`${field}Fixed`]) return;
+  if (option.correct) {
+    item[`${field}Fixed`] = true;
+    item[field === "author" ? "authorInput" : "detailsInput"] = option.text;
+    if (!item.attempted && item.authorFixed && item.detailsFixed) {
+      submitCurrent(false);
+      return;
+    }
+    if (item.attempted && (item.authorOk || item.authorFixed) && (item.detailsOk || item.detailsFixed)) {
+      item.answered = true;
+    }
+  } else if (!item[`${field}Wrong`].includes(index)) {
+    item[`${field}Wrong`].push(index);
+  }
+  saveSession();
+  render();
 }
 
 function goNext() {
@@ -800,6 +1204,504 @@ function goNext() {
 
 function current() {
   return state.queue[state.index];
+}
+
+function loadAssemble() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ASSEMBLE_KEY) || "null");
+    if (saved && validAssemble(saved)) return { ...saved, direction: saved.direction === "part" ? "part" : "work" };
+  } catch {
+    /* keep the default */
+  }
+  return { from: 1, to: 20, listen: false, direction: "work" };
+}
+
+function validAssemble(value) {
+  return (
+    Number.isInteger(value.from) &&
+    Number.isInteger(value.to) &&
+    value.from >= 1 &&
+    value.to <= 50 &&
+    value.from <= value.to &&
+    typeof value.listen === "boolean" &&
+    (value.direction === undefined || value.direction === "work" || value.direction === "part")
+  );
+}
+
+function saveAssembleSettings() {
+  localStorage.setItem(ASSEMBLE_KEY, JSON.stringify(state.assemble));
+}
+
+function saveAssembleSession(paused) {
+  if (!state.assembleQueue.length) {
+    sessionStorage.removeItem(ASSEMBLE_SESSION_KEY);
+    return;
+  }
+  sessionStorage.setItem(
+    ASSEMBLE_SESSION_KEY,
+    JSON.stringify({
+      settings: state.assemble,
+      index: state.assembleIndex,
+      screen: state.screen,
+      paused: Boolean(paused),
+      queue: state.assembleQueue,
+    }),
+  );
+}
+
+function restoreAssembleSession() {
+  if (state.screen === "question" || state.screen === "summary") return;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(ASSEMBLE_SESSION_KEY) || "null");
+    if (!saved || saved.paused || !Array.isArray(saved.queue) || !saved.queue.length) return;
+    if (!validAssemble(saved.settings)) return;
+    if (!saved.queue.every((card) => layers.some((item) => item.n === card.n))) return;
+    state.assemble = saved.settings;
+    state.assembleQueue = saved.queue;
+    state.assembleIndex = Math.min(saved.index || 0, saved.queue.length - 1);
+    state.screen = "assemble-card";
+  } catch {
+    sessionStorage.removeItem(ASSEMBLE_SESSION_KEY);
+  }
+}
+
+function pausedAssemble() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(ASSEMBLE_SESSION_KEY) || "null");
+    if (!saved?.queue?.length) return null;
+    return saved;
+  } catch {
+    return null;
+  }
+}
+
+function assemblePlan(settings) {
+  const listen = settings.listen ? " Ar klausīšanos." : " Bez klausīšanās.";
+  if (settings.direction === "part") {
+    const count = titledLayers().length;
+    return `Būs visi ${count} gabali, kuriem daļai ir savs nosaukums. Redzi daļu, raksti lielo darbu un autoru.${listen}`;
+  }
+  if (!Number.isInteger(settings.from) || !Number.isInteger(settings.to) || settings.from < 1 || settings.to > 50 || settings.from > settings.to) {
+    return "Numuriem jābūt no 1 līdz 50, un pirmais nedrīkst būt lielāks par otro.";
+  }
+  const count = settings.to - settings.from + 1;
+  const order = count === 1
+    ? `Būs 1 gabals: numurs ${settings.from}.`
+    : `Būs visi ${count} gabali no ${settings.from}–${settings.to}, katrs vienu reizi, nejaušā secībā.`;
+  return order + listen;
+}
+
+function assembleSetup() {
+  const { from, to, listen, direction } = state.assemble;
+  const fromPart = direction === "part";
+  const saved = pausedAssemble();
+  const lede = fromPart
+    ? "Redzi daļas nosaukumu. Pieraksti lielo darbu pilnā vārdā — kopā ar to, kas tas ir, piemēram, balets vai opera — un autoru. Gabali nāk nejauši, katrs vienu reizi."
+    : "Redzi lielo darbu pilnā nosaukumā, kopā ar to, kas tas ir. Pieraksti autoru. Ja darbam ir sava daļa, pieraksti arī to. Gabali nāk nejauši, katrs vienu reizi. Vari izlaist lauku un iet tālāk.";
+  const range = fromPart
+    ? ""
+    : `
+      <fieldset>
+        <legend>Kurus gabalus savienot?</legend>
+        <div class="range-row">
+          <label class="field">No
+            <input type="number" min="1" max="50" name="from" data-field="assemble-from" value="${from}" inputmode="numeric" />
+          </label>
+          <label class="field">līdz
+            <input type="number" min="1" max="50" name="to" data-field="assemble-to" value="${to}" inputmode="numeric" />
+          </label>
+        </div>
+        <div class="presets" style="margin-top:10px">
+          ${[20, 30, 40, 50].map((end) => `<button type="button" class="chip ${to === end && from === 1 ? "is-on" : ""}" data-action="assemble-preset" data-to="${end}">1–${end}</button>`).join("")}
+        </div>
+      </fieldset>`;
+  return `
+    <p class="lede">${lede}</p>
+    <form class="card" id="assemble-form">
+      <fieldset>
+        <legend>No kā sākt?</legend>
+        <label class="radio"><input type="radio" name="assemble-direction" value="work" ${fromPart ? "" : "checked"} /> No lielā darba — raksti autoru un daļu</label>
+        <label class="radio"><input type="radio" name="assemble-direction" value="part" ${fromPart ? "checked" : ""} /> No daļas nosaukuma — raksti lielo darbu un autoru</label>
+      </fieldset>
+      ${range}
+      <fieldset style="margin-top:18px">
+        <legend>Klausīšanās</legend>
+        <label class="radio"><input type="radio" name="assemble-listen" value="no" ${listen ? "" : "checked"} /> Bez klausīšanās</label>
+        <label class="radio"><input type="radio" name="assemble-listen" value="yes" ${listen ? "checked" : ""} /> Ar klausīšanos — jāatrod īstais ieraksts</label>
+      </fieldset>
+      <p class="plan" id="assemble-plan">${assemblePlan(state.assemble)}</p>
+      <div class="actions" style="margin-top:16px">
+        <button class="primary" type="submit">Sākt</button>
+      </div>
+    </form>
+    ${saved ? `<div class="card"><p>Iepriekšējā savienošana vēl ir atvērta.</p><button class="ghost" type="button" data-action="assemble-resume">Turpināt</button></div>` : ""}
+  `;
+}
+
+function assembleCard() {
+  const card = currentAssemble();
+  const layer = layerBy(card?.n);
+  if (!card || !layer) return "";
+  const total = state.assembleQueue.length;
+  const atStart = state.assembleIndex === 0;
+  const last = state.assembleIndex + 1 === total;
+  const fromPart = state.assemble.direction === "part";
+  const shown = fromPart ? layer.part : layer.prompt;
+  const fields = fromPart
+    ? `${assembleField(card, "work", "Lielais darbs")}${assembleField(card, "author", "Autors")}`
+    : `${assembleField(card, "author", "Autors")}${layer.part ? assembleField(card, "part", "Daļa vai dziesma") : ""}`;
+  return `
+    <section class="card">
+      <div class="progress">
+        <strong>${state.assembleIndex + 1}. no ${total}</strong>
+        <button class="tiny" type="button" data-action="assemble-setup">Mainīt izvēli</button>
+      </div>
+      <form id="assemble-card-form">
+        <div class="piece-top">
+          <span class="num">${String(layer.n).padStart(2, "0")}</span>
+          <div>
+            <p class="key-kicker">${fromPart ? "Daļa vai dziesma" : "Lielais darbs"}</p>
+            <h2>${esc(shown)}</h2>
+          </div>
+        </div>
+        <div class="stack">
+          ${fields}
+        </div>
+        ${card.note ? `<p class="status">${esc(card.note)}</p>` : ""}
+        ${assembleHearing(card)}
+        <div class="actions" style="margin-top:16px">
+          <button class="ghost" type="button" data-action="assemble-step" data-by="-1" ${atStart ? "disabled" : ""}>Iepriekšējais</button>
+          <button class="ghost" type="button" data-action="assemble-step" data-by="1">${last ? "Pabeigt" : "Tālāk"}</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+function assembleDone() {
+  const total = state.assembleQueue.length;
+  const fromPart = state.assemble.direction === "part";
+  const full = state.assembleQueue.filter((card) => {
+    const layer = layerBy(card.n);
+    if (!layer || card.authorStatus !== "done") return false;
+    if (fromPart && card.workStatus !== "done") return false;
+    if (!fromPart && layer.part && card.partStatus !== "done") return false;
+    if (card.clips?.length > 1 && !card.clipDone) return false;
+    return true;
+  }).length;
+  const line = total === 1 ? "Vienīgais gabals ir bijis." : `Visi ${total} gabali ir bijuši, katrs vienu reizi.`;
+  return `
+    <section class="card">
+      <h2>Gatavs</h2>
+      <p class="lede">${line} Līdz galam savienoti ${full}.</p>
+      <div class="actions" style="margin-top:16px">
+        <button class="primary" type="button" data-action="assemble-again">Sākt no jauna</button>
+        <button class="ghost" type="button" data-action="assemble-setup">Mainīt izvēli</button>
+      </div>
+    </section>
+  `;
+}
+
+function assembleField(card, field, label) {
+  const status = card[`${field}Status`];
+  const cls = status === "done" ? "is-good" : card[`${field}Miss`] ? "is-bad" : "";
+  const buttons = status === "open"
+    ? `<div class="actions">
+        <button class="primary" type="button" data-action="assemble-check" data-field="${field}">Pārbaudīt</button>
+        <button class="ghost" type="button" data-action="assemble-show" data-field="${field}">Parādīt variantus</button>
+      </div>`
+    : "";
+  return `
+    <div>
+      <label class="field">${label}
+        <input class="${cls}" type="text" data-field="assemble-${field}" value="${esc(card[`${field}Input`])}" autocomplete="off" autocapitalize="off" lang="lv" ${status === "open" ? "" : "readonly"} />
+      </label>
+      ${buttons}
+      ${assembleOptionList(card, field)}
+    </div>
+  `;
+}
+
+function assembleOptionList(card, field) {
+  const options = card[`${field}Options`];
+  if (!options || card[`${field}Status`] === "done") return "";
+  return `<div class="options">${options.map((option, index) => {
+    const wrong = card[`${field}Wrong`].includes(index);
+    const mark = wrong ? "✕ " : "";
+    return `<button class="option ${wrong ? "is-bad" : ""}" type="button" data-action="assemble-option" data-field="${field}" data-index="${index}" ${wrong ? "disabled" : ""}>${mark}${esc(option.text)}</button>`;
+  }).join("")}</div>`;
+}
+
+function assembleHearing(card) {
+  if (!card.clips || card.clips.length < 2) return "";
+  return `
+    <section class="clips">
+      <h3>Klausies un atzīmē īsto</h3>
+      ${card.clips.map((n) => hearRow(card, n)).join("")}
+      <p class="status" id="assemble-status"></p>
+    </section>
+  `;
+}
+
+function hearRow(card, n) {
+  const wrong = card.clipWrong.includes(n);
+  const good = card.clipDone && n === card.n;
+  const cls = good ? "is-good" : wrong ? "is-bad" : "";
+  const layer = layerBy(n);
+  const name = layer ? layer.part || layer.prompt : "";
+  const pick = good
+    ? `<span class="hear-name">${esc(name)}</span>`
+    : `<button class="ghost" type="button" data-action="assemble-pick" data-n="${n}" ${wrong || card.clipDone ? "disabled" : ""}>${wrong ? "Nav šis" : "Šis ir īstais"}</button>`;
+  return `
+    <div class="hear-row ${cls}">
+      <button class="play compact" type="button" data-action="assemble-play" data-n="${n}">Klausīties</button>
+      ${pick}
+    </div>
+  `;
+}
+
+function readAssembleForm() {
+  const form = document.querySelector("#assemble-form");
+  const direction = document.querySelector("[name='assemble-direction']:checked")?.value === "part" ? "part" : "work";
+  const from = direction === "part" ? state.assemble.from : Number(form?.querySelector("[name='from']")?.value);
+  const to = direction === "part" ? state.assemble.to : Number(form?.querySelector("[name='to']")?.value);
+  const listen = document.querySelector("[name='assemble-listen']:checked")?.value === "yes";
+  const next = { from, to, listen, direction };
+  if (!validAssemble(next)) {
+    const plan = document.querySelector("#assemble-plan");
+    if (plan) {
+      plan.textContent = "Numuriem jābūt no 1 līdz 50, un pirmais nedrīkst būt lielāks par otro.";
+      plan.classList.add("warn");
+    }
+    return null;
+  }
+  return next;
+}
+
+function startAssemble(settings) {
+  state.assemble = settings;
+  saveAssembleSettings();
+  const pool = settings.direction === "part"
+    ? titledLayers()
+    : layers.filter((item) => item.n >= settings.from && item.n <= settings.to);
+  const order = shuffle(pool);
+  state.assembleQueue = order.map((item) => makeAssembleCard(item, order, settings.listen));
+  state.assembleIndex = 0;
+  state.screen = "assemble-card";
+  stopPlayback();
+  saveAssembleSession(false);
+  render();
+  focusAssemble();
+}
+
+function titledLayers() {
+  return layers.filter((item) => item.part && item.partShape === "title");
+}
+
+function focusAssemble() {
+  const field = state.assemble.direction === "part" ? "assemble-work" : "assemble-author";
+  document.querySelector(`[data-field='${field}']`)?.focus();
+}
+
+function makeAssembleCard(item, pool, listen) {
+  const clips = listen ? clipNumbers(item, pool) : [];
+  return {
+    n: item.n,
+    authorInput: "",
+    partInput: "",
+    workInput: "",
+    authorStatus: "open",
+    partStatus: "open",
+    workStatus: "open",
+    authorMiss: false,
+    partMiss: false,
+    workMiss: false,
+    authorOptions: null,
+    partOptions: null,
+    workOptions: null,
+    authorWrong: [],
+    partWrong: [],
+    workWrong: [],
+    clips: clips.length > 1 ? clips : [],
+    clipWrong: [],
+    clipDone: false,
+    note: "",
+  };
+}
+
+function resumeAssemble() {
+  const saved = pausedAssemble();
+  if (!saved || !validAssemble(saved.settings)) return;
+  state.assemble = saved.settings;
+  state.assembleQueue = saved.queue;
+  state.assembleIndex = Math.min(saved.index || 0, saved.queue.length - 1);
+  state.screen = "assemble-card";
+  saveAssembleSession(false);
+  render();
+  focusAssemble();
+}
+
+function currentAssemble() {
+  return state.assembleQueue[state.assembleIndex];
+}
+
+function layerBy(n) {
+  return layers.find((item) => item.n === n) || null;
+}
+
+function sessionLayers() {
+  return state.assembleQueue.map((card) => layerBy(card.n)).filter(Boolean);
+}
+
+function readAssembleInputs() {
+  const card = currentAssemble();
+  if (!card) return;
+  const author = document.querySelector("[data-field='assemble-author']");
+  const part = document.querySelector("[data-field='assemble-part']");
+  const work = document.querySelector("[data-field='assemble-work']");
+  if (author && card.authorStatus === "open") card.authorInput = author.value;
+  if (part && card.partStatus === "open") card.partInput = part.value;
+  if (work && card.workStatus === "open") card.workInput = work.value;
+}
+
+function checkAssemble(field) {
+  readAssembleInputs();
+  const card = currentAssemble();
+  const layer = layerBy(card?.n);
+  if (!card || !layer || card[`${field}Status`] !== "open") return;
+  if (field === "part" && !layer.part) return;
+  if (field === "work" && state.assemble.direction !== "part") return;
+  const value = card[`${field}Input`].trim();
+  if (!value) {
+    card[`${field}Miss`] = false;
+    revealAssemble(card, layer, field);
+  } else if (fieldOk(layer, field, value)) {
+    card[`${field}Status`] = "done";
+    card[`${field}Miss`] = false;
+    card.note = "";
+  } else {
+    card[`${field}Miss`] = true;
+    revealAssemble(card, layer, field);
+    card.note = "";
+  }
+  saveAssembleSession(false);
+  render();
+}
+
+function showAssembleOptions(field) {
+  readAssembleInputs();
+  const card = currentAssemble();
+  const layer = layerBy(card?.n);
+  if (!card || !layer || card[`${field}Status`] === "done") return;
+  if (field === "part" && !layer.part) return;
+  if (field === "work" && state.assemble.direction !== "part") return;
+  revealAssemble(card, layer, field);
+  saveAssembleSession(false);
+  render();
+}
+
+function revealAssemble(card, layer, field) {
+  if (!card[`${field}Options`]) {
+    const correct = field === "author" ? layer.author : field === "work" ? layer.prompt : layer.part;
+    card[`${field}Options`] = choiceTexts(layer, field, sessionLayers()).map((text) => ({
+      text,
+      correct: text === correct,
+    }));
+    card[`${field}Wrong`] = [];
+  }
+  card[`${field}Status`] = "variants";
+}
+
+function pickAssembleOption(field, index) {
+  const card = currentAssemble();
+  const option = card?.[`${field}Options`]?.[index];
+  if (!card || !option || card[`${field}Status`] === "done") return;
+  if (option.correct) {
+    card[`${field}Status`] = "done";
+    card[`${field}Input`] = option.text;
+    card[`${field}Miss`] = false;
+  } else if (!card[`${field}Wrong`].includes(index)) {
+    card[`${field}Wrong`].push(index);
+  }
+  saveAssembleSession(false);
+  render();
+}
+
+function pickAssembleClip(n) {
+  const card = currentAssemble();
+  if (!card || card.clipDone || card.clipWrong.includes(n)) return;
+  if (n === card.n) card.clipDone = true;
+  else card.clipWrong.push(n);
+  saveAssembleSession(false);
+  render();
+}
+
+function stepAssemble(by) {
+  readAssembleInputs();
+  stopPlayback();
+  const next = state.assembleIndex + by;
+  if (next < 0) return;
+  if (next >= state.assembleQueue.length) {
+    state.screen = "assemble-done";
+    sessionStorage.removeItem(ASSEMBLE_SESSION_KEY);
+    render();
+    return;
+  }
+  state.assembleIndex = next;
+  saveAssembleSession(false);
+  render();
+  focusAssemble();
+}
+
+function toggleAssemblePlay(n) {
+  const piece = pieces.find((item) => item.n === n);
+  if (!piece) return;
+  const token = `assemble:${n}`;
+  if (playerState.playing && playerState.clip?.token === token) {
+    playerState.playing = false;
+    markAssemblePlaying("Apturēts.");
+    try {
+      playerState.player?.pauseVideo();
+    } catch {
+      /* the player may not exist yet */
+    }
+    return;
+  }
+  if (playerState.clip?.token === token && playerState.ready) {
+    playerState.playing = true;
+    markAssemblePlaying("Skan");
+    playerState.player.playVideo();
+    return;
+  }
+  const bounds = selectedBounds(piece);
+  playerState.clip = {
+    id: piece.youtubeId,
+    start: bounds.start,
+    end: bounds.end,
+    token,
+    assemble: true,
+    n: piece.n,
+  };
+  playerState.playing = true;
+  if (!playerState.ready) {
+    markAssemblePlaying("Atskaņotājs vēl gatavojas. Paspied vēlreiz pēc mirkļa.");
+    return;
+  }
+  markAssemblePlaying("Ielādē… ja vispirms ir reklāma, pagaidi.");
+  loadClip(playerState.clip);
+}
+
+function markAssemblePlaying(message) {
+  const playingN = playerState.playing && playerState.clip?.assemble ? playerState.clip.n : null;
+  document.querySelectorAll("[data-action='assemble-play']").forEach((button) => {
+    const on = Number(button.dataset.n) === playingN;
+    button.textContent = on ? "Apturēt" : "Klausīties";
+    button.classList.toggle("is-on", on);
+  });
+  if (message) {
+    const status = document.querySelector("#assemble-status");
+    if (status) status.textContent = message;
+  }
 }
 
 function togglePlay() {
@@ -1007,6 +1909,19 @@ function onPlayerState(event) {
     }
     return;
   }
+  if (playerState.clip.assemble) {
+    if (event.data === YT.PlayerState.PLAYING) {
+      playerState.playing = true;
+      markAssemblePlaying();
+    }
+    if (event.data === YT.PlayerState.ENDED || event.data === YT.PlayerState.PAUSED) {
+      if (performance.now() < playerState.skipUntil) return;
+      if (!playerState.playing && event.data === YT.PlayerState.PAUSED) return;
+      playerState.playing = false;
+      markAssemblePlaying(event.data === YT.PlayerState.ENDED ? "Fragments beidzās." : null);
+    }
+    return;
+  }
   if (event.data === YT.PlayerState.PLAYING) {
     playerState.playing = true;
     setPlayUi(current() || playerState.clip, "Skan…");
@@ -1026,6 +1941,7 @@ function onPlayerError(event) {
     ? "Šo ierakstu te nevar atskaņot."
     : "Neizdevās atskaņot. Paspied vēlreiz.";
   if (playerState.clip?.learn) setLearnUi(playerState.clip.n, null, message);
+  else if (playerState.clip?.assemble) markAssemblePlaying(message);
   else {
     setPlayUi(
       current(),
@@ -1055,6 +1971,20 @@ function watchPlayback() {
       return;
     }
     if (code === YT.PlayerState.PLAYING) setLearnUi(n, time, `Skan · ${clock(time)}`);
+    return;
+  }
+  if (playerState.clip.assemble) {
+    const { start, end } = playerState.clip;
+    if (code === YT.PlayerState.PLAYING && time >= end - 0.2 && time < end + 3) {
+      playerState.player.pauseVideo();
+      playerState.playing = false;
+      markAssemblePlaying("Fragments beidzās.");
+      return;
+    }
+    if (code === YT.PlayerState.PLAYING && time + 0.3 >= start) {
+      const left = Math.max(0, end - time);
+      markAssemblePlaying(`Skan · atlikušas ${Math.ceil(left)} s`);
+    }
     return;
   }
   const { start, end } = playerState.clip;
