@@ -14,7 +14,7 @@
       href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=7" />
+    <link rel="stylesheet" href="styles.css?v=8" />
     <link rel="apple-touch-icon" href="apple-touch-icon.png" />
     <link rel="apple-touch-icon-precomposed" href="apple-touch-icon-precomposed.png" />
     <link rel="icon" href="icon-192.png" sizes="192x192" type="image/png" />
@@ -28,6 +28,34 @@
     <div id="yt-host" class="yt-host" aria-hidden="true">
       <div id="player"></div>
     </div>
-    <script type="module" src="app.js?v=17"></script>
+    <script>
+      (function () {
+        var key = "ml-build";
+        if ("serviceWorker" in navigator) {
+          navigator.serviceWorker.register("./sw.js", { scope: "./" });
+          if (!navigator.serviceWorker.controller && !sessionStorage.getItem("ml-sw")) {
+            navigator.serviceWorker.addEventListener("controllerchange", function () {
+              sessionStorage.setItem("ml-sw", "1");
+              location.reload();
+            });
+          }
+        }
+        fetch("./build.txt?" + Date.now(), { cache: "no-store" })
+          .then(function (response) { return response.text(); })
+          .then(function (text) {
+            var build = text.trim();
+            if (!build) return;
+            var saved = localStorage.getItem(key);
+            if (saved === build) {
+              if (location.search.indexOf("b=") !== -1) history.replaceState(null, "", location.pathname);
+              return;
+            }
+            localStorage.setItem(key, build);
+            if (saved) location.replace(location.pathname + "?b=" + encodeURIComponent(build));
+          })
+          .catch(function () {});
+      })();
+    </script>
+    <script type="module" src="app.js?v=18"></script>
   </body>
 </html>
